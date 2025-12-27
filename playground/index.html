@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diagram Engine Playground | SDLC.dev</title>
+  <meta name="description" content="Interactive playground for Universal Diagram Engine - 22+ diagram types from simple text DSL" />
+  
+  <!-- Open Graph -->
+  <meta property="og:title" content="Diagram Engine Playground" />
+  <meta property="og:description" content="22+ diagram types from simple text DSL - Mind maps, flowcharts, ERD, architecture, wireframes and more" />
+  <meta property="og:image" content="https://diagram.sdlc.dev/og-image.png" />
+  <meta property="og:url" content="https://diagram.sdlc.dev" />
+  
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Diagram Engine Playground" />
+  <meta name="twitter:description" content="22+ diagram types from simple text DSL" />
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #12121a;
+      --bg-tertiary: #1a1a2e;
+      --text-primary: #ffffff;
+      --text-secondary: #888888;
+      --text-muted: #555555;
+      --border: rgba(255, 255, 255, 0.1);
+      --purple: #7C3AED;
+      --blue: #0EA5E9;
+      --green: #10B981;
+    }
+    
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: linear-gradient(135deg, var(--bg-primary), var(--bg-tertiary), var(--bg-primary));
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+    
+    /* Header */
+    .header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 10, 15, 0.8);
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--purple), var(--blue));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+    }
+    
+    .logo h1 {
+      font-size: 1.3rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .logo span {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      background: var(--bg-tertiary);
+      padding: 4px 8px;
+      border-radius: 12px;
+      margin-left: 8px;
+    }
+    
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--bg-secondary);
+      border-color: var(--purple);
+    }
+    
+    .btn-primary {
+      background: var(--purple);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #6d28d9;
+    }
+    
+    /* Main Layout */
+    .main {
+      display: flex;
+      height: calc(100vh - 69px);
+    }
+    
+    /* Sidebar */
+    .sidebar {
+      width: 280px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .sidebar-header h3 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .diagram-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    
+    .diagram-item {
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin-bottom: 2px;
+    }
+    
+    .diagram-item:hover {
+      background: rgba(124, 58, 237, 0.1);
+      color: var(--text-primary);
+    }
+    
+    .diagram-item.active {
+      background: rgba(124, 58, 237, 0.2);
+      color: var(--purple);
+      font-weight: 600;
+    }
+    
+    .diagram-item .icon {
+      font-size: 1.1rem;
+    }
+    
+    /* Editor Panel */
+    .editor-panel {
+      width: 380px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    
+    .editor-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .editor-header h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .editor-actions {
+      display: flex;
+      gap: 6px;
+    }
+    
+    .editor-actions button {
+      padding: 6px 10px;
+      font-size: 0.75rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .editor-actions button:hover {
+      background: var(--purple);
+      color: white;
+      border-color: var(--purple);
+    }
+    
+    .editor-textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 16px;
+      color: #a78bfa;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+    }
+    
+    .editor-textarea::placeholder {
+      color: var(--text-muted);
+    }
+    
+    /* Preview Panel */
+    .preview-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    
+    .preview-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .preview-header h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    
+    .preview-info {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    
+    .preview-canvas {
+      flex: 1;
+      padding: 16px;
+      overflow: hidden;
+    }
+    
+    /* Syntax Help */
+    .syntax-help {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .syntax-help h4 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    
+    .syntax-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+    }
+    
+    .syntax-item code {
+      background: var(--bg-tertiary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--purple);
+      white-space: nowrap;
+    }
+    
+    .syntax-item span {
+      color: var(--text-secondary);
+    }
+    
+    /* Responsive */
+    @media (max-width: 1200px) {
+      .sidebar {
+        width: 60px;
+      }
+      .diagram-item span {
+        display: none;
+      }
+    }
+    
+    @media (max-width: 900px) {
+      .editor-panel {
+        width: 300px;
+      }
+    }
+    
+    @media (max-width: 768px) {
+      .main {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        height: 60px;
+        flex-direction: row;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .diagram-list {
+        display: flex;
+        overflow-x: auto;
+        padding: 8px;
+      }
+      .editor-panel {
+        width: 100%;
+        height: 40%;
+      }
+      .preview-panel {
+        height: 60%;
+      }
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--purple);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/playground/main.tsx"></script>
+</body>
+</html>

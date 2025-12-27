@@ -1,0 +1,123 @@
+{
+  "name": "ddflow",
+  "version": "1.0.0",
+  "description": "22+ diagram types from simple text DSL - Mind maps, flowcharts, ERD, architecture, wireframes and more. 100% client-side with drag & drop support.",
+  "keywords": [
+    "diagram",
+    "flowchart",
+    "mindmap",
+    "erd",
+    "architecture",
+    "wireframe",
+    "mermaid-alternative",
+    "react",
+    "visualization",
+    "dsl",
+    "parser",
+    "chart",
+    "graph",
+    "sequence-diagram",
+    "state-machine",
+    "org-chart",
+    "gantt",
+    "uml",
+    "ddflow",
+    "client-side"
+  ],
+  "author": "Durgesh Dandotiya <hello@ddflow.dev> (https://ddflow.dev)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ddflow/ddflow"
+  },
+  "homepage": "https://ddflow.dev",
+  "bugs": {
+    "url": "https://github.com/ddflow/ddflow/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/durgeshdandotiya"
+  },
+  "main": "dist/index.cjs.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.esm.js",
+      "require": "./dist/index.cjs.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./mindmap": {
+      "import": "./dist/mindmap.esm.js",
+      "require": "./dist/mindmap.cjs.js"
+    },
+    "./flowchart": {
+      "import": "./dist/flowchart.esm.js",
+      "require": "./dist/flowchart.cjs.js"
+    },
+    "./erd": {
+      "import": "./dist/erd.esm.js",
+      "require": "./dist/erd.cjs.js"
+    },
+    "./wireframe": {
+      "import": "./dist/wireframe.esm.js",
+      "require": "./dist/wireframe.cjs.js"
+    },
+    "./architecture": {
+      "import": "./dist/architecture.esm.js",
+      "require": "./dist/architecture.cjs.js"
+    },
+    "./parsers": {
+      "import": "./dist/parsers.esm.js",
+      "require": "./dist/parsers.cjs.js",
+      "types": "./dist/parsers.d.ts"
+    },
+    "./styles": "./dist/styles.css"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build:lib",
+    "docs": "typedoc --out docs/api src/index.ts",
+    "playground": "vite --config vite.playground.config.ts",
+    "release": "npm run build:lib && npm publish"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "eslint": "^8.45.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^3.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typedoc": "^0.25.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "vite-plugin-dts": "^3.6.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

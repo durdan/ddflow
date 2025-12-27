@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED"/>
+      <stop offset="100%" style="stop-color:#0EA5E9"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="120" height="120" rx="24" fill="url(#bg)"/>
+  
+  <!-- Flow lines (representing diagrams) -->
+  <path d="M 25 40 Q 60 25 95 40" stroke="white" stroke-width="3" fill="none" opacity="0.4" stroke-linecap="round"/>
+  <path d="M 25 60 L 95 60" stroke="white" stroke-width="3" fill="none" opacity="0.5" stroke-linecap="round"/>
+  <path d="M 25 80 Q 60 95 95 80" stroke="white" stroke-width="3" fill="none" opacity="0.4" stroke-linecap="round"/>
+  
+  <!-- DD Text - Bold and prominent -->
+  <text x="60" y="72" font-family="system-ui, -apple-system, sans-serif" font-size="42" font-weight="900" fill="white" text-anchor="middle">DD</text>
+  
+  <!-- Flow arrow indicator -->
+  <path d="M 85 60 L 95 60 L 90 55 M 95 60 L 90 65" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Small nodes -->
+  <circle cx="25" cy="60" r="5" fill="white"/>
+  <circle cx="60" cy="40" r="4" fill="white" opacity="0.7"/>
+  <circle cx="60" cy="80" r="4" fill="white" opacity="0.7"/>
+</svg>
