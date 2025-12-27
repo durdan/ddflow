@@ -309,7 +309,7 @@ const Parsers = {
     const levels = new Map(), visited = new Set();
     const hasIncoming = new Set(edges.map(e => e.target));
     const roots = nodesArr.filter(n => !hasIncoming.has(n.id));
-    
+
     const assignLevels = (nodeId, level) => {
       if (visited.has(nodeId)) return;
       visited.add(nodeId);
@@ -318,22 +318,31 @@ const Parsers = {
     };
     (roots.length ? roots : nodesArr.slice(0, 1)).forEach(n => assignLevels(n.id, 0));
     nodesArr.forEach(n => { if (!levels.has(n.id)) levels.set(n.id, 0); });
-    
+
     const levelGroups = new Map();
     nodesArr.forEach(n => {
       const level = levels.get(n.id) || 0;
       if (!levelGroups.has(level)) levelGroups.set(level, []);
       levelGroups.get(level).push(n);
     });
-    
-    for (let level = 0; level <= Math.max(...Array.from(levels.values()), 0); level++) {
+
+    // Better layout: more horizontal spacing, center nodes vertically per level
+    const maxNodesInLevel = Math.max(...Array.from(levelGroups.values()).map(g => g.length), 1);
+    const levelCount = Math.max(...Array.from(levels.values()), 0) + 1;
+    const horizontalSpacing = 220; // Space between levels
+    const verticalSpacing = 160; // Space between nodes in same level
+
+    for (let level = 0; level <= levelCount - 1; level++) {
       const group = levelGroups.get(level) || [];
+      const groupHeight = group.length * verticalSpacing;
+      const startY = 150 + (maxNodesInLevel * verticalSpacing - groupHeight) / 2;
+
       group.forEach((node, idx) => {
-        node.x = 150 + level * 200;
-        node.y = 100 + idx * 140 + (level % 2 === 0 ? 0 : 50);
+        node.x = 180 + level * horizontalSpacing;
+        node.y = startY + idx * verticalSpacing;
       });
     }
-    
+
     return { nodes: nodesArr, edges };
   },
 
@@ -1072,7 +1081,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark }) {
 
 // User Journey with draggable nodes
 function UserJourneyDiagram({ data, theme = THEMES.dark }) {
-  const canvas = useInteractiveCanvas({ x: 30, y: 30 });
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { nodes, edges } = data;
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
 
@@ -1080,23 +1089,58 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
       <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
-        
+
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs>
+            <marker id="journey-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+              <path d="M 0 0 L 6 3 L 0 6 Z" fill={COLORS.purple} opacity="0.9" />
+            </marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {edges.map(edge => {
               const src = nodes.find(n => n.id === edge.source), tgt = nodes.find(n => n.id === edge.target);
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
-              const srcR = src.shape === 'circle' ? 55 : 75, tgtR = tgt.shape === 'circle' ? 55 : 75;
-              const sx = sp.x + (dx / dist) * srcR, sy = sp.y + (dy / dist) * srcR;
-              const tx = tp.x - (dx / dist) * tgtR, ty = tp.y - (dy / dist) * tgtR;
-              const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+
+              // Node sizes for edge calculation
+              const srcW = src.shape === 'circle' ? 50 : 70, srcH = src.shape === 'circle' ? 50 : 45;
+              const tgtW = tgt.shape === 'circle' ? 50 : 70, tgtH = tgt.shape === 'circle' ? 50 : 45;
+
+              // Calculate edge start/end points at node boundaries
+              const angle = Math.atan2(dy, dx);
+              const sx = sp.x + Math.cos(angle) * srcW;
+              const sy = sp.y + Math.sin(angle) * srcH;
+              const tx = tp.x - Math.cos(angle) * tgtW;
+              const ty = tp.y - Math.sin(angle) * tgtH;
+
+              // Simple quadratic curve - subtle bend
+              const midX = (sx + tx) / 2;
+              const midY = (sy + ty) / 2;
+              const curveOffset = Math.min(Math.abs(dy) * 0.3, 30);
+              const ctrlX = midX;
+              const ctrlY = midY - curveOffset;
+
+              const path = `M ${sx} ${sy} Q ${ctrlX} ${ctrlY} ${tx} ${ty}`;
+              const labelWidth = edge.label ? Math.max(edge.label.length * 7 + 16, 50) : 0;
+
               return (
                 <g key={edge.id}>
-                  <defs><marker id={`arr-${edge.id}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
-                  <line x1={sx} y1={sy} x2={tx} y2={ty} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd={`url(#arr-${edge.id})`} opacity={0.7} />
-                  {edge.label && <><rect x={mx - 35} y={my - 12} width={70} height={18} rx={4} fill="rgba(0,0,0,0.85)" /><text x={mx} y={my + 2} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{edge.label}</text></>}
+                  {/* Background line */}
+                  <path d={path} fill="none" stroke="rgba(124,58,237,0.15)" strokeWidth={4} strokeLinecap="round" />
+                  {/* Main line */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} markerEnd="url(#journey-arrow)" strokeLinecap="round" opacity="0.7" />
+                  {/* Animated dots flowing in arrow direction */}
+                  <path d={path} fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth={2} strokeLinecap="round" strokeDasharray="4,12">
+                    <animate attributeName="stroke-dashoffset" from="16" to="0" dur="0.8s" repeatCount="indefinite" />
+                  </path>
+                  {/* Label */}
+                  {edge.label && (
+                    <g>
+                      <rect x={midX - labelWidth / 2} y={ctrlY - 10} width={labelWidth} height={20} rx={10} fill="rgba(15, 23, 42, 0.9)" stroke="rgba(124,58,237,0.5)" strokeWidth={1} />
+                      <text x={midX} y={ctrlY + 4} textAnchor="middle" fill="#e0e0e0" fontSize={10} fontWeight="500" fontFamily="system-ui, sans-serif">{edge.label}</text>
+                    </g>
+                  )}
                 </g>
               );
             })}
@@ -1107,21 +1151,21 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
           {nodes.map(node => {
             const pos = getPos(node);
             const isDragging = canvas.dragging === node.id;
-            
+
             if (node.shape === 'circle') {
               return (
-                <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `3px solid ${node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${node.color}50` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
-                  <span style={{ fontSize: 28 }}>{node.icon}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+                  <span style={{ fontSize: 24 }}>{node.icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
                 </div>
               );
             }
-            
+
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}20`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${node.color}50` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
-                <span style={{ fontSize: 24 }}>{node.icon}</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                <span style={{ fontSize: 22 }}>{node.icon}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
               </div>
             );
           })}
