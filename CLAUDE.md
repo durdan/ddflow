@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Commit Guidelines
+
+When committing code, always use Durgesh Dandotiya as the main author:
+- **Author:** Durgesh Dandotiya <durgesh_d@hotmail.com>
+- **Co-Author:** Claude Opus 4.5 <noreply@anthropic.com>
+
 ## Project Overview
 
 DDFlow is a React-based diagram rendering library that converts simple text DSL into interactive diagrams. It supports 22+ diagram types and runs entirely client-side with no server dependencies.

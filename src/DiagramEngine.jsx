@@ -38,21 +38,26 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  
+
   // Node dragging state
   const [positions, setPositions] = useState({});
   const [dragging, setDragging] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  const getCanvasPoint = useCallback((e) => {
+  // Touch state for pinch-to-zoom
+  const lastTouchDistance = useRef(null);
+  const lastTouchCenter = useRef(null);
+
+  const getCanvasPoint = useCallback((clientX, clientY) => {
     if (!canvasRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left - pan.x) / zoom,
-      y: (e.clientY - rect.top - pan.y) / zoom
+      x: (clientX - rect.left - pan.x) / zoom,
+      y: (clientY - rect.top - pan.y) / zoom
     };
   }, [pan, zoom]);
 
+  // Mouse handlers
   const handleCanvasMouseDown = useCallback((e) => {
     if (e.target === canvasRef.current || e.target.classList.contains('canvas-bg')) {
       setIsPanning(true);
@@ -63,7 +68,7 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const handleNodeMouseDown = useCallback((e, nodeId, nodeX, nodeY) => {
     e.stopPropagation();
     setDragging(nodeId);
-    const point = getCanvasPoint(e);
+    const point = getCanvasPoint(e.clientX, e.clientY);
     setDragOffset({ x: point.x - nodeX, y: point.y - nodeY });
   }, [getCanvasPoint]);
 
@@ -71,7 +76,7 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
     } else if (dragging) {
-      const point = getCanvasPoint(e);
+      const point = getCanvasPoint(e.clientX, e.clientY);
       setPositions(prev => ({
         ...prev,
         [dragging]: { x: point.x - dragOffset.x, y: point.y - dragOffset.y }
@@ -84,9 +89,94 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setDragging(null);
   }, []);
 
+  // Touch handlers
+  const getTouchDistance = (touches) => {
+    if (touches.length < 2) return null;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const getTouchCenter = (touches) => {
+    if (touches.length < 2) return { x: touches[0].clientX, y: touches[0].clientY };
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2
+    };
+  };
+
+  const handleTouchStart = useCallback((e) => {
+    if (e.touches.length === 2) {
+      // Pinch gesture start
+      e.preventDefault();
+      lastTouchDistance.current = getTouchDistance(e.touches);
+      lastTouchCenter.current = getTouchCenter(e.touches);
+    } else if (e.touches.length === 1) {
+      // Single touch - check if on canvas for panning
+      const touch = e.touches[0];
+      if (e.target === canvasRef.current || e.target.classList.contains('canvas-bg')) {
+        setIsPanning(true);
+        setPanStart({ x: touch.clientX - pan.x, y: touch.clientY - pan.y });
+      }
+    }
+  }, [pan]);
+
+  const handleNodeTouchStart = useCallback((e, nodeId, nodeX, nodeY) => {
+    e.stopPropagation();
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      setDragging(nodeId);
+      const point = getCanvasPoint(touch.clientX, touch.clientY);
+      setDragOffset({ x: point.x - nodeX, y: point.y - nodeY });
+    }
+  }, [getCanvasPoint]);
+
+  const handleTouchMove = useCallback((e) => {
+    if (e.touches.length === 2) {
+      // Pinch to zoom
+      e.preventDefault();
+      const newDistance = getTouchDistance(e.touches);
+      const newCenter = getTouchCenter(e.touches);
+
+      if (lastTouchDistance.current && newDistance) {
+        const scale = newDistance / lastTouchDistance.current;
+        setZoom(z => Math.min(Math.max(z * scale, 0.2), 3));
+      }
+
+      if (lastTouchCenter.current) {
+        const dx = newCenter.x - lastTouchCenter.current.x;
+        const dy = newCenter.y - lastTouchCenter.current.y;
+        setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+      }
+
+      lastTouchDistance.current = newDistance;
+      lastTouchCenter.current = newCenter;
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      if (isPanning) {
+        setPan({ x: touch.clientX - panStart.x, y: touch.clientY - panStart.y });
+      } else if (dragging) {
+        e.preventDefault();
+        const point = getCanvasPoint(touch.clientX, touch.clientY);
+        setPositions(prev => ({
+          ...prev,
+          [dragging]: { x: point.x - dragOffset.x, y: point.y - dragOffset.y }
+        }));
+      }
+    }
+  }, [isPanning, panStart, dragging, dragOffset, getCanvasPoint]);
+
+  const handleTouchEnd = useCallback(() => {
+    setIsPanning(false);
+    setDragging(null);
+    lastTouchDistance.current = null;
+    lastTouchCenter.current = null;
+  }, []);
+
   const handleWheel = useCallback((e) => {
     e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const zoomSpeed = 0.002;
+    const delta = 1 - e.deltaY * zoomSpeed;
     setZoom(z => Math.min(Math.max(z * delta, 0.2), 3));
   }, []);
 
@@ -95,6 +185,26 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setZoom(1);
     setPositions({});
   }, [initialPan]);
+
+  // Fit content to view
+  const fitToView = useCallback((contentBounds) => {
+    if (!canvasRef.current || !contentBounds) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const padding = 60;
+
+    const scaleX = (rect.width - padding * 2) / contentBounds.width;
+    const scaleY = (rect.height - padding * 2) / contentBounds.height;
+    const newZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.3), 1.5);
+
+    const centerX = contentBounds.x + contentBounds.width / 2;
+    const centerY = contentBounds.y + contentBounds.height / 2;
+
+    setPan({
+      x: rect.width / 2 - centerX * newZoom,
+      y: rect.height / 2 - centerY * newZoom
+    });
+    setZoom(newZoom);
+  }, []);
 
   const getNodePosition = useCallback((nodeId, defaultX, defaultY) => {
     const pos = positions[nodeId];
@@ -114,8 +224,13 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     handleNodeMouseDown,
     handleMouseMove,
     handleMouseUp,
+    handleTouchStart,
+    handleNodeTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
     handleWheel,
     resetView,
+    fitToView,
     getNodePosition,
     setPositions
   };
@@ -1085,9 +1200,21 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
   const { nodes, edges } = data;
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
 
+  // Calculate content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    if (!nodes || nodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = nodes.map(n => n.x);
+    const ys = nodes.map(n => n.y);
+    const minX = Math.min(...xs) - 100;
+    const maxX = Math.max(...xs) + 100;
+    const minY = Math.min(...ys) - 80;
+    const maxY = Math.max(...ys) + 80;
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [nodes]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
 
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
@@ -1154,7 +1281,7 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
 
             if (node.shape === 'circle') {
               return (
-                <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+                <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                   <span style={{ fontSize: 24 }}>{node.icon}</span>
                   <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
                 </div>
@@ -1162,7 +1289,7 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
             }
 
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
                 <span style={{ fontSize: 22 }}>{node.icon}</span>
                 <span style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
@@ -1171,7 +1298,7 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1182,9 +1309,16 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
   const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
 
+  const contentBounds = useMemo(() => {
+    if (!initNodes || initNodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = initNodes.map(n => n.x);
+    const ys = initNodes.map(n => n.y);
+    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 80, width: Math.max(...xs) - Math.min(...xs) + 200, height: Math.max(...ys) - Math.min(...ys) + 160 };
+  }, [initNodes]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
@@ -1209,13 +1343,13 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
             const s = styles[node.type] || styles.default;
             const isDragging = canvas.dragging === node.id;
             const isDiamond = node.type === 'decision';
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60, background: `${s.color}20`, border: `2px solid ${s.color}`, borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${s.color}50` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' };
+            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60, background: `${s.color}20`, border: `2px solid ${s.color}`, borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${s.color}50` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' };
             if (isDiamond) { style.width = 65; style.height = 65; style.left = pos.x - 32; style.top = pos.y - 32; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
-            return <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={style}><div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center' }}>{s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}<div style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div></div></div>;
+            return <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={style}><div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center' }}>{s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}<div style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div></div></div>;
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1229,9 +1363,16 @@ function ERDDiagram({ tables, theme = THEMES.dark }) {
   }, [tables]);
   const getPos = (t) => canvas.getNodePosition(t.name, t.defaultX, t.defaultY);
 
+  const contentBounds = useMemo(() => {
+    if (!layout || layout.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(t => t.defaultX);
+    const ys = layout.map(t => t.defaultY);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 300 };
+  }, [layout]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="erd-crow" markerWidth="16" markerHeight="12" refX="14" refY="6" orient="auto"><path d="M 0 6 L 10 0 M 0 6 L 10 6 M 0 6 L 10 12" stroke={COLORS.blue} strokeWidth="2" fill="none" /></marker></defs>
@@ -1250,7 +1391,7 @@ function ERDDiagram({ tables, theme = THEMES.dark }) {
             const pos = getPos(t);
             const isDragging = canvas.dragging === t.name;
             return (
-              <div key={t.name} onMouseDown={(e) => canvas.handleNodeMouseDown(e, t.name, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: theme.surface, border: `2px solid ${COLORS.orange}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.orange}40` : '0 4px 20px rgba(0,0,0,0.3)', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={t.name} onMouseDown={(e) => canvas.handleNodeMouseDown(e, t.name, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, t.name, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: theme.surface, border: `2px solid ${COLORS.orange}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.orange}40` : '0 4px 20px rgba(0,0,0,0.3)', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${COLORS.orange}, ${COLORS.amber}dd)` }}><span style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>📊 {t.name}</span></div>
                 <div style={{ padding: '8px 0' }}>
                   {t.fields?.map((f, i) => (
@@ -1266,7 +1407,7 @@ function ERDDiagram({ tables, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1281,9 +1422,16 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
   }, [data]);
   const getPos = (d) => canvas.getNodePosition(d.id, d.defaultX, d.defaultY);
 
+  const contentBounds = useMemo(() => {
+    if (!layout.devices || layout.devices.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.devices.map(d => d.defaultX);
+    const ys = layout.devices.map(d => d.defaultY);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 200, height: Math.max(...ys) - Math.min(...ys) + 200 };
+  }, [layout]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -1300,7 +1448,7 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
             const pos = getPos(device);
             const isDragging = canvas.dragging === device.id;
             return (
-              <div key={device.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, device.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: theme.surface, border: `2px solid ${COLORS.blue}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.blue}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={device.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, device.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, device.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: theme.surface, border: `2px solid ${COLORS.blue}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.blue}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '2.5rem', marginBottom: 6 }}>{icons[device.type] || '📦'}</div>
                 <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary }}>{device.label}</div>
                 {device.ip && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, fontFamily: 'monospace', marginTop: 4 }}>{device.ip}</div>}
@@ -1309,7 +1457,7 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1323,16 +1471,23 @@ function ClassDiagram({ data, theme = THEMES.dark }) {
   }, [data.classes]);
   const getPos = (c) => canvas.getNodePosition(c.id, c.defaultX, c.defaultY);
 
+  const contentBounds = useMemo(() => {
+    if (!layout || layout.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(c => c.defaultX);
+    const ys = layout.map(c => c.defaultY);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 250 };
+  }, [layout]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.map(cls => {
             const pos = getPos(cls);
             const isDragging = canvas.dragging === cls.id;
             return (
-              <div key={cls.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 220, background: theme.surface, border: `2px solid ${COLORS.purple}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.purple}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={cls.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 220, background: theme.surface, border: `2px solid ${COLORS.purple}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.purple}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ padding: '10px 14px', background: `${COLORS.purple}30`, borderBottom: `1px solid ${COLORS.purple}` }}><span style={{ color: theme.textPrimary, fontWeight: 700 }}>{cls.name}</span></div>
                 <div style={{ padding: '8px 14px', borderBottom: `1px solid ${theme.border}` }}>
                   {cls.properties.map((p, i) => <div key={i} style={{ fontSize: '0.8rem', color: theme.textSecondary }}><span style={{ color: COLORS.orange }}>{p.visibility}</span> {p.name}: {p.type}</div>)}
@@ -1347,7 +1502,7 @@ function ClassDiagram({ data, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1378,9 +1533,16 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
   }, [data]);
   const getPos = (n) => canvas.getNodePosition(n.id, n.defaultX, n.defaultY);
 
+  const contentBounds = useMemo(() => {
+    if (!layout.nodes || layout.nodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.nodes.map(n => n.defaultX);
+    const ys = layout.nodes.map(n => n.defaultY);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 250, height: Math.max(...ys) - Math.min(...ys) + 180 };
+  }, [layout]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -1398,7 +1560,7 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
             const pos = getPos(node);
             const isDragging = canvas.dragging === node.id;
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div>
                 {node.title && <div style={{ fontSize: '0.75rem', color: node.color, marginTop: 4 }}>{node.title}</div>}
               </div>
@@ -1406,7 +1568,7 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1417,9 +1579,15 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
   const canvas = useInteractiveCanvas({ x: 30, y: 20 });
   const getPos = (p) => canvas.getNodePosition(p.id, p.x, 0);
 
+  const contentBounds = useMemo(() => {
+    if (!participants || participants.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = participants.map(p => p.x);
+    return { x: Math.min(...xs) - 60, y: 0, width: Math.max(...xs) - Math.min(...xs) + 200, height: 85 + messages.length * 60 + 80 };
+  }, [participants, messages]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <svg width="100%" height="100%" style={{ position: 'absolute' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {participants.map((p, i) => {
@@ -1427,7 +1595,7 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
               return (
                 <g key={p.id}>
                   <line x1={pos.x + 60} y1={85} x2={pos.x + 60} y2={85 + messages.length * 60 + 40} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="4,4" opacity={0.4} />
-                  <rect x={pos.x} y={30} width={120} height={45} rx={8} fill={`${BRANCH_COLORS[i % BRANCH_COLORS.length]}20`} stroke={BRANCH_COLORS[i % BRANCH_COLORS.length]} strokeWidth={2} style={{ cursor: canvas.dragging === p.id ? 'grabbing' : 'grab' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, p.id, pos.x, 0); }} />
+                  <rect x={pos.x} y={30} width={120} height={45} rx={8} fill={`${BRANCH_COLORS[i % BRANCH_COLORS.length]}20`} stroke={BRANCH_COLORS[i % BRANCH_COLORS.length]} strokeWidth={2} style={{ cursor: canvas.dragging === p.id ? 'grabbing' : 'grab', touchAction: 'none' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, p.id, pos.x, 0); }} onTouchStart={(e) => { e.stopPropagation(); canvas.handleNodeTouchStart(e, p.id, pos.x, 0); }} />
                   <text x={pos.x + 60} y={58} textAnchor="middle" fill={theme.textPrimary} fontSize={13} fontWeight={600} style={{ pointerEvents: 'none' }}>{p.label}</text>
                 </g>
               );
@@ -1449,7 +1617,7 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
           </g>
         </svg>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1459,9 +1627,15 @@ function TimelineDiagram({ events, theme = THEMES.dark }) {
   const canvas = useInteractiveCanvas({ x: 30, y: 0 });
   const getPos = (e) => canvas.getNodePosition(e.id, e.x, e.y);
 
+  const contentBounds = useMemo(() => {
+    if (!events || events.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = events.map(e => e.x);
+    return { x: Math.min(...xs) - 60, y: 0, width: Math.max(...xs) - Math.min(...xs) + 280, height: 350 };
+  }, [events]);
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0', padding: '80px 50px' }}>
           <div style={{ position: 'absolute', top: 265, left: 50, width: events.length * 220, height: 4, background: `linear-gradient(90deg, ${COLORS.purple}, ${COLORS.blue}, ${COLORS.green})`, borderRadius: 2 }} />
           {events.map((event, i) => {
@@ -1469,7 +1643,7 @@ function TimelineDiagram({ events, theme = THEMES.dark }) {
             const color = event.isMilestone ? COLORS.orange : COLORS.purple;
             const isDragging = canvas.dragging === event.id;
             return (
-              <div key={event.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, event.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: 80, width: 190, cursor: isDragging ? 'grabbing' : 'grab' }}>
+              <div key={event.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, event.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, event.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: 80, width: 190, cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
                 <div style={{ background: event.isMilestone ? `${COLORS.orange}15` : theme.surface, border: `2px solid ${color}`, borderRadius: 12, padding: 16, textAlign: 'center', minHeight: 110, boxShadow: isDragging ? `0 0 30px ${color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
                   {event.isMilestone && <div style={{ fontSize: '1.3rem', marginBottom: 6 }}>🎯</div>}
                   <div style={{ fontSize: '0.8rem', color, fontWeight: 600, marginBottom: 6 }}>{event.date}</div>
@@ -1483,7 +1657,7 @@ function TimelineDiagram({ events, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -1493,6 +1667,13 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
   const { commits, branches } = data;
   const canvas = useInteractiveCanvas({ x: 20, y: 20 });
   const getPos = (c) => canvas.getNodePosition(c.id, c.x, c.y);
+
+  const contentBounds = useMemo(() => {
+    if (!commits || commits.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = commits.map(c => c.x);
+    const ys = commits.map(c => c.y);
+    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 200, height: Math.max(...ys) - Math.min(...ys) + 120 };
+  }, [commits]);
 
   const connections = useMemo(() => {
     const conns = [];
@@ -1516,8 +1697,8 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
   }, [commits, branches]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <svg width="100%" height="100%" style={{ position: 'absolute' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {branches.map((b, i) => <text key={b.name} x={30} y={b.y + 5} fill={BRANCH_COLORS[i % BRANCH_COLORS.length]} fontSize={14} fontWeight={700}>{b.name}</text>)}
@@ -1532,7 +1713,7 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
               const bi = branches.findIndex(b => b.name === c.branch);
               const isDragging = canvas.dragging === c.id;
               return (
-                <g key={c.id} style={{ cursor: isDragging ? 'grabbing' : 'grab' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, c.id, pos.x, pos.y); }}>
+                <g key={c.id} style={{ cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, c.id, pos.x, pos.y); }} onTouchStart={(e) => { e.stopPropagation(); canvas.handleNodeTouchStart(e, c.id, pos.x, pos.y); }}>
                   <circle cx={pos.x} cy={pos.y} r={c.isMerge ? 14 : 12} fill={BRANCH_COLORS[bi % BRANCH_COLORS.length]} stroke={isDragging ? '#fff' : theme.canvasBg} strokeWidth={isDragging ? 4 : 3} />
                   {c.isMerge && <circle cx={pos.x} cy={pos.y} r={6} fill={theme.canvasBg} />}
                   <text x={pos.x} y={pos.y - 22} textAnchor="middle" fill={theme.textPrimary} fontSize={12} fontWeight={600}>{c.label}</text>
@@ -1542,7 +1723,7 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
           </g>
         </svg>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -2121,6 +2302,205 @@ function SimpleCardDiagram({ items, title, icon, color, theme = THEMES.dark }) {
   );
 }
 
+// Use Case Diagram with actors, ovals, and connections
+function UseCaseDiagram({ data, theme = THEMES.dark }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { actors = [], useCases = [], relationships = [] } = data;
+
+  // Smart layout: group use cases by their connected actor for better organization
+  const { actorPositions, useCasePositions } = useMemo(() => {
+    // Find which use cases each actor connects to
+    const actorUseCases = new Map();
+    actors.forEach(a => actorUseCases.set(a.label.toLowerCase(), []));
+
+    relationships.forEach(rel => {
+      const actorKey = rel.from.toLowerCase();
+      const ucLabel = rel.to.toLowerCase();
+      if (actorUseCases.has(actorKey)) {
+        actorUseCases.get(actorKey).push(ucLabel);
+      }
+    });
+
+    // Position use cases in a single column, grouped by actor
+    const ucPositions = [];
+    const usedUCs = new Set();
+    let currentY = 120;
+    const ucSpacing = 110;
+    const ucX = 450;
+
+    // First pass: place use cases connected to actors in order
+    actors.forEach((actor, actorIdx) => {
+      const connectedUCs = actorUseCases.get(actor.label.toLowerCase()) || [];
+      connectedUCs.forEach(ucLabel => {
+        const uc = useCases.find(u => u.label.toLowerCase() === ucLabel);
+        if (uc && !usedUCs.has(uc.id)) {
+          ucPositions.push({ ...uc, x: ucX, y: currentY, actorIndex: actorIdx });
+          usedUCs.add(uc.id);
+          currentY += ucSpacing;
+        }
+      });
+    });
+
+    // Second pass: place any unconnected use cases
+    useCases.forEach(uc => {
+      if (!usedUCs.has(uc.id)) {
+        ucPositions.push({ ...uc, x: ucX, y: currentY, actorIndex: -1 });
+        currentY += ucSpacing;
+      }
+    });
+
+    // Position actors to align with their connected use cases
+    const actorPos = actors.map((actor, i) => {
+      const connectedUCPositions = ucPositions.filter(uc => uc.actorIndex === i);
+      let actorY;
+      if (connectedUCPositions.length > 0) {
+        // Center actor vertically among its connected use cases
+        const minY = Math.min(...connectedUCPositions.map(uc => uc.y));
+        const maxY = Math.max(...connectedUCPositions.map(uc => uc.y));
+        actorY = (minY + maxY) / 2;
+      } else {
+        actorY = 150 + i * 180;
+      }
+      return { ...actor, x: 120, y: actorY };
+    });
+
+    return { actorPositions: actorPos, useCasePositions: ucPositions };
+  }, [actors, useCases, relationships]);
+
+  const getActorPos = (actor) => canvas.getNodePosition(actor.id, actor.x, actor.y);
+  const getUseCasePos = (uc) => canvas.getNodePosition(uc.id, uc.x, uc.y);
+
+  // Find connections by matching labels
+  const connections = useMemo(() => {
+    return relationships.map((rel, i) => {
+      const fromActor = actorPositions.find(a => a.label.toLowerCase() === rel.from.toLowerCase());
+      const toUseCase = useCasePositions.find(uc => uc.label.toLowerCase() === rel.to.toLowerCase());
+      if (fromActor && toUseCase) {
+        return { id: `conn-${i}`, from: fromActor, to: toUseCase };
+      }
+      return null;
+    }).filter(Boolean);
+  }, [relationships, actorPositions, useCasePositions]);
+
+  // System boundary dimensions
+  const systemBounds = useMemo(() => {
+    if (useCasePositions.length === 0) return { x: 280, y: 40, width: 400, height: 300 };
+    const xs = useCasePositions.map(uc => uc.x);
+    const ys = useCasePositions.map(uc => uc.y);
+    const padding = 100;
+    return {
+      x: Math.min(...xs) - padding,
+      y: Math.min(...ys) - padding - 20,
+      width: Math.max(...xs) - Math.min(...xs) + padding * 2 + 140,
+      height: Math.max(...ys) - Math.min(...ys) + padding * 2 + 80
+    };
+  }, [useCasePositions]);
+
+  // Calculate content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    const allX = [...actorPositions.map(a => a.x), ...useCasePositions.map(u => u.x)];
+    const allY = [...actorPositions.map(a => a.y), ...useCasePositions.map(u => u.y)];
+    if (allX.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const minX = Math.min(...allX) - 100;
+    const maxX = Math.max(...allX) + 100;
+    const minY = Math.min(...allY) - 80;
+    const maxY = Math.max(...allY) + 80;
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [actorPositions, useCasePositions]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        @keyframes flow { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+      `}</style>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `radial-gradient(circle at 1px 1px, ${theme.gridColor} 1px, transparent 0)`, backgroundSize: `${30 * canvas.zoom}px ${30 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs>
+            <linearGradient id="uc-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor={COLORS.purple} />
+              <stop offset="100%" stopColor={COLORS.blue} />
+            </linearGradient>
+            <filter id="uc-glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* System boundary - glassmorphism style */}
+            <rect x={systemBounds.x} y={systemBounds.y} width={systemBounds.width} height={systemBounds.height} fill="rgba(124, 58, 237, 0.03)" rx={24} />
+            <rect x={systemBounds.x} y={systemBounds.y} width={systemBounds.width} height={systemBounds.height} fill="none" stroke="url(#uc-gradient)" strokeWidth={2} rx={24} opacity="0.4" />
+            <text x={systemBounds.x + systemBounds.width / 2} y={systemBounds.y + 30} textAnchor="middle" fill={COLORS.purple} fontSize={13} fontWeight="600" fontFamily="system-ui, sans-serif" opacity="0.8">System Boundary</text>
+
+            {/* Connections with gradient and animation */}
+            {connections.map((conn, idx) => {
+              const fromPos = getActorPos(conn.from);
+              const toPos = getUseCasePos(conn.to);
+              const sx = fromPos.x + 45;
+              const sy = fromPos.y;
+              const tx = toPos.x - 85;
+              const ty = toPos.y;
+
+              // Direct horizontal line for clean look
+              const path = `M ${sx} ${sy} L ${tx} ${ty}`;
+
+              return (
+                <g key={conn.id}>
+                  {/* Subtle glow */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeLinecap="round" opacity="0.15" />
+                  {/* Main gradient line */}
+                  <path d={path} fill="none" stroke="url(#uc-gradient)" strokeWidth={1.5} strokeLinecap="round" opacity="0.6" />
+                  {/* Animated particles */}
+                  <path d={path} fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="2,10" style={{ animation: `flow 0.6s linear infinite`, animationDelay: `${idx * 0.15}s` }} />
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {/* Actors - modern card style with icon */}
+          {actorPositions.map(actor => {
+            const pos = getActorPos(actor);
+            const isDragging = canvas.dragging === actor.id;
+            return (
+              <div key={actor.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, actor.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, actor.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 45, top: pos.y - 55, width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: isDragging ? 'grabbing' : 'grab', transition: isDragging ? 'none' : 'transform 0.2s', transform: isDragging ? 'scale(1.05)' : 'scale(1)', touchAction: 'none' }}>
+                {/* Modern avatar circle */}
+                <div style={{ width: 70, height: 70, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.pink}30, ${COLORS.purple}20)`, border: `2px solid ${COLORS.pink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isDragging ? `0 8px 32px ${COLORS.pink}40` : `0 4px 20px rgba(0,0,0,0.3)`, transition: 'box-shadow 0.2s' }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="8" r="4" stroke={COLORS.pink} strokeWidth="1.5" fill={`${COLORS.pink}20`} />
+                    <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke={COLORS.pink} strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                  </svg>
+                </div>
+                <div style={{ marginTop: 10, padding: '4px 12px', background: 'rgba(0,0,0,0.4)', borderRadius: 12, backdropFilter: 'blur(8px)' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }}>{actor.label}</span>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Use Cases - modern pill style */}
+          {useCasePositions.map(uc => {
+            const pos = getUseCasePos(uc);
+            const isDragging = canvas.dragging === uc.id;
+            return (
+              <div key={uc.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(124, 58, 237, 0.1))`, border: `1.5px solid rgba(14, 165, 233, 0.5)`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 8px 32px ${COLORS.blue}30, inset 0 0 20px ${COLORS.blue}10` : `0 4px 20px rgba(0,0,0,0.2), inset 0 0 15px rgba(255,255,255,0.03)`, backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
+                <span style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center', padding: '0 12px', lineHeight: 1.3 }}>{uc.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.15, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.85, 0.2))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+    </div>
+  );
+}
+
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -2179,7 +2559,7 @@ export function UniversalDiagram({ type, data, source, theme = 'dark' }) {
     case 'git': return <GitGraphDiagram data={parsed} theme={t} />;
     case 'wireframe': return <WireframeDiagram data={parsed} theme={t} />;
     case 'class': return <ClassDiagram data={parsed} theme={t} />;
-    case 'usecase': return <SimpleCardDiagram items={[...parsed.actors.map(a => ({ ...a, label: `Actor: ${a.label}` })), ...parsed.useCases]} title="Use Case Diagram" icon="👤" color={COLORS.blue} theme={t} />;
+    case 'usecase': return <UseCaseDiagram data={parsed} theme={t} />;
     case 'component': return <SimpleCardDiagram items={parsed.components} title="Component Diagram" icon="📦" color={COLORS.purple} theme={t} />;
     case 'c4': return <SimpleCardDiagram items={parsed.elements} title="C4 Context Diagram" icon="🏗️" color={COLORS.cyan} theme={t} />;
     case 'requirement': return <SimpleCardDiagram items={parsed.requirements} title="Requirements" icon="📋" color={COLORS.orange} theme={t} />;
@@ -2256,7 +2636,7 @@ const DEMOS = {
 </>`},
   class: { title: '📐 Class', source: `class User\n+id: string\n+name: string\n+getFullName(): string\n\nclass Post\n+title: string\n+publish(): void` },
   activity: { title: '🔄 Activity', source: `[start]\n:Open App;\n:Login;\n<Authenticated?>\n:Show Dashboard;\n[end]` },
-  usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)` },
+  usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)\n(View Reports)\n\nCustomer -> Browse Products\nCustomer -> Checkout\nAdmin -> Manage Inventory\nAdmin -> View Reports` },
   component: { title: '📦 Component', source: `[component] Frontend\n[component] API Gateway\n[component] Auth Service\n[component] Database` },
   c4: { title: '🏛️ C4', source: `[person] User: App customer\n[system] WebApp: Main app\n[system] API: Backend\n[database] DB: PostgreSQL` },
   requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: high\n}` }
@@ -2300,4 +2680,4 @@ export default function Demo() {
   );
 }
 
-export { MindMapDiagram, ERDDiagram, ArchitectureDiagram, FlowDiagram, UserJourneyDiagram, TimelineDiagram, SequenceDiagram, OrgChartDiagram, NetworkDiagram, GanttDiagram, DeploymentDiagram, PieChartDiagram, QuadrantDiagram, GitGraphDiagram, WireframeDiagram, ClassDiagram, Parsers, THEMES, COLORS };
+export { MindMapDiagram, ERDDiagram, ArchitectureDiagram, FlowDiagram, UserJourneyDiagram, TimelineDiagram, SequenceDiagram, OrgChartDiagram, NetworkDiagram, GanttDiagram, DeploymentDiagram, PieChartDiagram, QuadrantDiagram, GitGraphDiagram, WireframeDiagram, ClassDiagram, UseCaseDiagram, Parsers, THEMES, COLORS };
