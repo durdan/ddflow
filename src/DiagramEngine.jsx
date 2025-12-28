@@ -337,8 +337,8 @@ const Parsers = {
   },
 
   flowchart: (text) => {
-    const nodes = new Map(), edges = [];
-    let y = 80;
+    const nodes = new Map(), edges = [], nodeOrder = [];
+    // First pass: collect all nodes and edges
     text.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
@@ -347,12 +347,57 @@ const Parsers = {
         const match = part.match(/^\((\w+)\)\s*(.+)/) || [null, 'process', part];
         const type = match[1] || 'process', label = (match[2] || part).trim();
         const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
-        if (!nodes.has(id)) { nodes.set(id, { id, type, label, x: 300, y }); y += 100; }
+        if (!nodes.has(id)) { nodes.set(id, { id, type, label, x: 0, y: 0 }); nodeOrder.push(id); }
         if (i > 0) {
           const prevLabel = (parts[i - 1].match(/^\(\w+\)\s*(.+)/) || [null, parts[i - 1]])[1].trim();
-          edges.push({ id: `e-${edges.length}`, source: prevLabel.toLowerCase().replace(/[^a-z0-9]/g, '_'), target: id });
+          const sourceId = prevLabel.toLowerCase().replace(/[^a-z0-9]/g, '_');
+          const edgeLabel = line.match(/->\s*\(?\w+\)?\s*([^:]+):\s*(.+)$/)?.[2] || '';
+          edges.push({ id: `e-${edges.length}`, source: sourceId, target: id, label: edgeLabel });
         }
       });
+    });
+    // Second pass: calculate layout with branching
+    const outgoing = new Map(), incoming = new Map();
+    edges.forEach(e => {
+      if (!outgoing.has(e.source)) outgoing.set(e.source, []);
+      outgoing.get(e.source).push(e.target);
+      if (!incoming.has(e.target)) incoming.set(e.target, []);
+      incoming.get(e.target).push(e.source);
+    });
+    // Find root nodes (no incoming edges)
+    const roots = nodeOrder.filter(id => !incoming.has(id) || incoming.get(id).length === 0);
+    const positioned = new Set();
+    const positionNode = (id, x, y, branchOffset = 0) => {
+      if (positioned.has(id)) return;
+      const node = nodes.get(id);
+      if (!node) return;
+      node.x = x + branchOffset;
+      node.y = y;
+      positioned.add(id);
+      const children = outgoing.get(id) || [];
+      if (children.length === 1) {
+        positionNode(children[0], x, y + 120, branchOffset);
+      } else if (children.length >= 2) {
+        // Branch: first child goes left, second goes right
+        const spacing = 180;
+        children.forEach((childId, i) => {
+          const offset = (i === 0) ? -spacing/2 : (i === 1) ? spacing/2 : (i - 0.5) * spacing;
+          positionNode(childId, x, y + 120, offset);
+        });
+      }
+    };
+    // Position from roots
+    let startX = 350;
+    roots.forEach((rootId, i) => { positionNode(rootId, startX + i * 200, 80); });
+    // Position any unpositioned nodes (disconnected)
+    let unposY = 80;
+    nodeOrder.forEach(id => {
+      if (!positioned.has(id)) {
+        const node = nodes.get(id);
+        node.x = 600; node.y = unposY;
+        unposY += 100;
+        positioned.add(id);
+      }
     });
     return { nodes: Array.from(nodes.values()), edges };
   },
@@ -1009,6 +1054,13 @@ const Parsers = {
       if (!line || line.startsWith('#')) return;
       const classMatch = line.match(/^class\s+(\w+)/i);
       if (classMatch) { if (currentClass) classes.push(currentClass); currentClass = { id: classMatch[1], name: classMatch[1], properties: [], methods: [] }; return; }
+      // Relationship syntax: Class1 --> Class2 : label or Class1 --|> Class2 (extends) or Class1 --* Class2 (composition)
+      const relMatch = line.match(/^(\w+)\s*(--|>|--\*|-->|--)\s*(\w+)(?:\s*:\s*(.+))?$/);
+      if (relMatch) {
+        const type = relMatch[2] === '--|>' ? 'extends' : relMatch[2] === '--*' ? 'composition' : 'association';
+        relationships.push({ from: relMatch[1], to: relMatch[3], type, label: relMatch[4]?.trim() || '' });
+        return;
+      }
       const propMatch = line.match(/^([+\-#~])?\s*(\w+)\s*:\s*(.+)$/);
       if (propMatch && currentClass) { currentClass.properties.push({ visibility: propMatch[1] || '+', name: propMatch[2], type: propMatch[3] }); return; }
       const methodMatch = line.match(/^([+\-#~])?\s*(\w+)\s*\(([^)]*)\)\s*(?::\s*(.+))?$/);
@@ -1019,21 +1071,79 @@ const Parsers = {
   },
 
   activity: (text) => {
-    const nodes = [], edges = [];
-    let y = 60;
-    text.split('\n').forEach((line, i) => {
-      line = line.trim();
-      if (!line || line.startsWith('#')) return;
-      if (line === '[start]' || line === 'start') { nodes.push({ id: `act-${i}`, type: 'start', label: '', x: 300, y }); y += 80; return; }
-      if (line === '[end]' || line === 'end') { nodes.push({ id: `act-${i}`, type: 'end', label: '', x: 300, y }); y += 80; return; }
-      const decMatch = line.match(/^<(.+)>$/);
-      if (decMatch) { nodes.push({ id: `act-${i}`, type: 'decision', label: decMatch[1], x: 300, y }); y += 80; return; }
-      const actMatch = line.match(/^:(.+);?$/);
-      if (actMatch) { nodes.push({ id: `act-${i}`, type: 'action', label: actMatch[1], x: 300, y }); y += 80; return; }
-      if (line && !line.includes('->')) { nodes.push({ id: `act-${i}`, type: 'action', label: line, x: 300, y }); y += 80; }
+    const nodeMap = new Map(), edges = [], nodeOrder = [];
+    // First pass: parse nodes
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    lines.forEach((line) => {
+      // Skip edge definitions in first pass
+      if (line.match(/^[^<:\[].+?\s*->\s*.+$/)) return;
+      let type = 'action', label = line, displayLabel = line;
+      if (line === '[start]' || line === 'start') { type = 'start'; label = 'start'; displayLabel = ''; }
+      else if (line === '[end]' || line === 'end') { type = 'end'; label = 'end'; displayLabel = ''; }
+      else if (line.match(/^<(.+)>$/)) { type = 'decision'; label = line.match(/^<(.+)>$/)[1]; displayLabel = label; }
+      else if (line.match(/^:(.+);?$/)) { label = line.match(/^:(.+);?$/)[1]; displayLabel = label; }
+      const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      if (!nodeMap.has(id)) { nodeMap.set(id, { id, type, label: displayLabel, x: 0, y: 0 }); nodeOrder.push(id); }
     });
-    for (let i = 0; i < nodes.length - 1; i++) edges.push({ id: `ae-${i}`, source: nodes[i].id, target: nodes[i + 1].id });
-    return { nodes, edges };
+    // Second pass: parse edges
+    lines.forEach((line) => {
+      const edgeMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
+      if (edgeMatch) {
+        const srcLabel = edgeMatch[1].replace(/^[<:\[]|[>;>\]]$/g, '').trim();
+        const tgtLabel = edgeMatch[2].replace(/^[<:\[]|[>;>\]]$/g, '').trim();
+        const label = edgeMatch[3]?.trim() || '';
+        const srcId = srcLabel.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const tgtId = tgtLabel.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        if (nodeMap.has(srcId) && nodeMap.has(tgtId)) {
+          edges.push({ id: `ae-${edges.length}`, source: srcId, target: tgtId, label });
+        }
+      }
+    });
+    // If no explicit edges, create sequential edges
+    if (edges.length === 0 && nodeOrder.length > 1) {
+      for (let i = 0; i < nodeOrder.length - 1; i++) {
+        edges.push({ id: `ae-${i}`, source: nodeOrder[i], target: nodeOrder[i + 1] });
+      }
+    }
+    // Calculate layout with branching support
+    const outgoing = new Map(), incoming = new Map();
+    edges.forEach(e => {
+      if (!outgoing.has(e.source)) outgoing.set(e.source, []);
+      outgoing.get(e.source).push(e.target);
+      if (!incoming.has(e.target)) incoming.set(e.target, []);
+      incoming.get(e.target).push(e.source);
+    });
+    const positioned = new Set();
+    const positionNode = (id, x, y) => {
+      if (positioned.has(id) || !nodeMap.has(id)) return;
+      const node = nodeMap.get(id);
+      node.x = x; node.y = y;
+      positioned.add(id);
+      const children = outgoing.get(id) || [];
+      if (children.length === 1) {
+        positionNode(children[0], x, y + 120);
+      } else if (children.length >= 2) {
+        const spacing = 200;
+        children.forEach((childId, i) => {
+          const xOffset = (i === 0) ? -spacing/2 : (i === 1) ? spacing/2 : (i - 0.5) * spacing;
+          positionNode(childId, x + xOffset, y + 120);
+        });
+      }
+    };
+    // Find and position from start node or first node
+    const startNode = nodeOrder.find(id => nodeMap.get(id)?.type === 'start') || nodeOrder[0];
+    if (startNode) positionNode(startNode, 400, 80);
+    // Position remaining nodes
+    let unposY = 80;
+    nodeOrder.forEach(id => {
+      if (!positioned.has(id)) {
+        const node = nodeMap.get(id);
+        node.x = 650; node.y = unposY;
+        unposY += 120;
+        positioned.add(id);
+      }
+    });
+    return { nodes: Array.from(nodeMap.values()), edges };
   },
 
   useCase: (text) => {
@@ -1076,13 +1186,15 @@ const Parsers = {
   },
 
   requirement: (text) => {
-    const requirements = [];
+    const requirements = [], traces = [];
     let current = null;
     text.split('\n').forEach((line, i) => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
       const reqMatch = line.match(/^requirement\s+(.+?)(?:\s*{)?$/i);
       if (reqMatch) { if (current) requirements.push(current); current = { id: `req-${i}`, name: reqMatch[1].trim(), text: '', risk: '', priority: '' }; return; }
+      const traceMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
+      if (traceMatch && !current) { traces.push({ from: traceMatch[1].trim(), to: traceMatch[2].trim(), label: traceMatch[3]?.trim() || '' }); return; }
       if (current) {
         if (line.startsWith('text:')) current.text = line.replace('text:', '').trim();
         else if (line.startsWith('risk:')) current.risk = line.replace('risk:', '').trim();
@@ -1091,7 +1203,7 @@ const Parsers = {
       }
     });
     if (current) requirements.push(current);
-    return { requirements };
+    return { requirements, traces };
   }
 };
 
@@ -1307,18 +1419,19 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
 // Flow Diagram with draggable nodes
 function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
-  const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, default: { color: COLORS.purple, icon: '📦' } };
+  const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, io: { color: COLORS.purple, icon: '📦' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
 
   const contentBounds = useMemo(() => {
     if (!initNodes || initNodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = initNodes.map(n => n.x);
     const ys = initNodes.map(n => n.y);
-    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 80, width: Math.max(...xs) - Math.min(...xs) + 200, height: Math.max(...ys) - Math.min(...ys) + 160 };
+    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 80, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 200 };
   }, [initNodes]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
       <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
@@ -1329,10 +1442,23 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+              const srcR = src.type === 'decision' ? 45 : 40, tgtR = tgt.type === 'decision' ? 45 : 40;
+              const sx = sp.x + (dx / dist) * srcR, sy = sp.y + (dy / dist) * 35;
+              const tx = tp.x - (dx / dist) * tgtR, ty = tp.y - (dy / dist) * 35;
+              // Curved path for horizontal branches
+              const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
+              const curveOffset = Math.abs(dx) > 50 ? Math.sign(dy || 1) * 20 : 0;
+              const path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
               return (
                 <g key={e.id}>
-                  <line x1={sp.x + (dx / dist) * 40} y1={sp.y + (dy / dist) * 30} x2={tp.x - (dx / dist) * 40} y2={tp.y - (dy / dist) * 30} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#flow-arr)" opacity={0.7} />
-                  {e.label && <text x={(sp.x + tp.x) / 2} y={(sp.y + tp.y) / 2 - 8} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{e.label}</text>}
+                  <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {e.label && (
+                    <g>
+                      <rect x={midX - e.label.length * 3.5 - 6} y={midY + curveOffset - 10} width={e.label.length * 7 + 12} height={18} rx={9} fill="rgba(15,23,42,0.9)" stroke="rgba(124,58,237,0.4)" strokeWidth={1} />
+                      <text x={midX} y={midY + curveOffset + 4} textAnchor="middle" fill="#e0e0e0" fontSize={10} fontWeight={500}>{e.label}</text>
+                    </g>
+                  )}
                 </g>
               );
             })}
@@ -1344,8 +1470,8 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
             const s = styles[node.type] || styles.default;
             const isDragging = canvas.dragging === node.id;
             const isDiamond = node.type === 'decision';
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60, background: `${s.color}20`, border: `2px solid ${s.color}`, borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${s.color}50` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' };
-            if (isDiamond) { style.width = 65; style.height = 65; style.left = pos.x - 32; style.top = pos.y - 32; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
+            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60, background: `${s.color}20`, border: `2px solid ${s.color}`, borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${s.color}50` : `0 4px 15px ${s.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' };
+            if (isDiamond) { style.width = 70; style.height = 70; style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
             return <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={style}><div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center' }}>{s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}<div style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div></div></div>;
           })}
         </div>
@@ -1466,29 +1592,74 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
 // Class Diagram with draggable classes
 function ClassDiagram({ data, theme = THEMES.dark }) {
   const canvas = useInteractiveCanvas();
+  const { classes = [], relationships = [] } = data;
   const layout = useMemo(() => {
-    const cols = Math.min(3, Math.ceil(Math.sqrt(data.classes.length)));
-    return data.classes.map((c, i) => ({ ...c, defaultX: 60 + (i % cols) * 280, defaultY: 60 + Math.floor(i / cols) * 200 }));
-  }, [data.classes]);
+    const cols = Math.min(3, Math.ceil(Math.sqrt(classes.length)));
+    return classes.map((c, i) => ({ ...c, defaultX: 80 + (i % cols) * 300, defaultY: 80 + Math.floor(i / cols) * 220, width: 230 }));
+  }, [classes]);
   const getPos = (c) => canvas.getNodePosition(c.id, c.defaultX, c.defaultY);
 
   const contentBounds = useMemo(() => {
     if (!layout || layout.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = layout.map(c => c.defaultX);
     const ys = layout.map(c => c.defaultY);
-    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 250 };
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 320, height: Math.max(...ys) - Math.min(...ys) + 280 };
   }, [layout]);
+
+  // Calculate class heights for accurate edge positioning
+  const getClassHeight = (cls) => {
+    const headerH = 38;
+    const propsH = cls.properties.length > 0 ? cls.properties.length * 22 + 16 : 30;
+    const methodsH = cls.methods.length > 0 ? cls.methods.length * 22 + 16 : 30;
+    return headerH + propsH + methodsH;
+  };
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
       <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs>
+            <marker id="class-inherit" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><polygon points="0 0, 12 6, 0 12" fill="none" stroke={COLORS.purple} strokeWidth="2" /></marker>
+            <marker id="class-assoc" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.blue} /></marker>
+            <marker id="class-diamond" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><polygon points="0 6, 6 0, 12 6, 6 12" fill={COLORS.orange} /></marker>
+          </defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {relationships.map((rel, i) => {
+              const src = layout.find(c => c.id === rel.from || c.name === rel.from);
+              const tgt = layout.find(c => c.id === rel.to || c.name === rel.to);
+              if (!src || !tgt) return null;
+              const sp = getPos(src), tp = getPos(tgt);
+              const srcH = getClassHeight(src), tgtH = getClassHeight(tgt);
+              const sx = sp.x + src.width / 2, sy = sp.y + srcH / 2;
+              const tx = tp.x + tgt.width / 2, ty = tp.y + tgtH / 2;
+              const dx = tx - sx, dy = ty - sy, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+              const startX = sx + (dx / dist) * (src.width / 2 + 5), startY = sy + (dy / dist) * (srcH / 2 + 5);
+              const endX = tx - (dx / dist) * (tgt.width / 2 + 15), endY = ty - (dy / dist) * (tgtH / 2 + 5);
+              const midX = (startX + endX) / 2, midY = (startY + endY) / 2;
+              const marker = rel.type === 'extends' ? 'url(#class-inherit)' : rel.type === 'composition' ? 'url(#class-diamond)' : 'url(#class-assoc)';
+              const color = rel.type === 'extends' ? COLORS.purple : rel.type === 'composition' ? COLORS.orange : COLORS.blue;
+              return (
+                <g key={i}>
+                  <line x1={startX} y1={startY} x2={endX} y2={endY} stroke={color} strokeWidth={2} strokeDasharray="8,4" markerEnd={marker} opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {rel.label && (
+                    <g>
+                      <rect x={midX - rel.label.length * 3.5 - 6} y={midY - 10} width={rel.label.length * 7 + 12} height={18} rx={4} fill="rgba(0,0,0,0.8)" />
+                      <text x={midX} y={midY + 4} textAnchor="middle" fill={color} fontSize={10}>{rel.label}</text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.map(cls => {
             const pos = getPos(cls);
             const isDragging = canvas.dragging === cls.id;
             return (
-              <div key={cls.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 220, background: theme.surface, border: `2px solid ${COLORS.purple}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.purple}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={cls.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: cls.width, background: theme.surface, border: `2px solid ${COLORS.purple}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.purple}40` : `0 4px 20px ${COLORS.purple}15`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ padding: '10px 14px', background: `${COLORS.purple}30`, borderBottom: `1px solid ${COLORS.purple}` }}><span style={{ color: theme.textPrimary, fontWeight: 700 }}>{cls.name}</span></div>
                 <div style={{ padding: '8px 14px', borderBottom: `1px solid ${theme.border}` }}>
                   {cls.properties.map((p, i) => <div key={i} style={{ fontSize: '0.8rem', color: theme.textSecondary }}><span style={{ color: COLORS.orange }}>{p.visibility}</span> {p.name}: {p.type}</div>)}
@@ -2286,19 +2457,247 @@ function WireframeDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
-function SimpleCardDiagram({ items, title, icon, color, theme = THEMES.dark }) {
+// Component Diagram with connections
+function ComponentDiagram({ data, theme = THEMES.dark }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { components = [], connections = [] } = data;
+
+  const typeStyles = {
+    service: { color: COLORS.blue, icon: '⚙️' },
+    database: { color: COLORS.green, icon: '🗄️' },
+    cache: { color: COLORS.red, icon: '⚡' },
+    queue: { color: COLORS.orange, icon: '📬' },
+    api: { color: COLORS.purple, icon: '🔌' },
+    component: { color: COLORS.purple, icon: '📦' },
+    default: { color: COLORS.purple, icon: '📦' }
+  };
+
+  const layout = useMemo(() => {
+    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(components.length))));
+    return components.map((c, i) => ({
+      ...c,
+      id: c.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      defaultX: 120 + (i % cols) * 220,
+      defaultY: 100 + Math.floor(i / cols) * 160,
+      style: typeStyles[c.type] || typeStyles.default
+    }));
+  }, [components]);
+
+  const getPos = (comp) => canvas.getNodePosition(comp.id, comp.defaultX, comp.defaultY);
+
+  const contentBounds = useMemo(() => {
+    if (!layout.length) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(c => c.defaultX);
+    const ys = layout.map(c => c.defaultY);
+    return { x: Math.min(...xs) - 80, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 280, height: Math.max(...ys) - Math.min(...ys) + 220 };
+  }, [layout]);
+
   return (
-    <div style={{ width: '100%', height: '100%', overflow: 'auto', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, padding: 20 }}>
-      <h3 style={{ color: theme.textPrimary, marginBottom: 16 }}>{title}</h3>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
-        {items.map((item, i) => (
-          <div key={i} style={{ width: 200, background: `${color}15`, border: `2px solid ${color}`, borderRadius: 12, padding: 16 }}>
-            <div style={{ fontSize: '1.5rem', marginBottom: 8 }}>{icon}</div>
-            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }}>{item.label || item.name}</div>
-            {(item.description || item.text) && <div style={{ fontSize: '0.75rem', color: theme.textSecondary, marginTop: 4 }}>{item.description || item.text}</div>}
-          </div>
-        ))}
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs><marker id="comp-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {connections.map((conn, i) => {
+              const src = layout.find(c => c.id === conn.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              const tgt = layout.find(c => c.id === conn.to.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              if (!src || !tgt) return null;
+              const sp = getPos(src), tp = getPos(tgt);
+              const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+              const midX = (sp.x + tp.x) / 2, midY = (sp.y + tp.y) / 2;
+              const perpX = -dy / dist * 30, perpY = dx / dist * 30;
+              const path = `M ${sp.x + (dx/dist)*75} ${sp.y + (dy/dist)*50} Q ${midX + perpX} ${midY + perpY} ${tp.x - (dx/dist)*75} ${tp.y - (dy/dist)*50}`;
+              return (
+                <g key={i}>
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#comp-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {conn.label && <text x={midX + perpX} y={midY + perpY - 8} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{conn.label}</text>}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {layout.map(comp => {
+            const pos = getPos(comp);
+            const isDragging = canvas.dragging === comp.id;
+            return (
+              <div key={comp.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, comp.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, comp.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 75, top: pos.y - 50, width: 150, height: 100, background: `${comp.style.color}15`, border: `2px solid ${comp.style.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${comp.style.color}50` : `0 4px 20px ${comp.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>{comp.style.icon}</div>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center', padding: '0 8px' }}>{comp.label}</div>
+              </div>
+            );
+          })}
+        </div>
       </div>
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+    </div>
+  );
+}
+
+// C4 Diagram with relationships
+function C4Diagram({ data, theme = THEMES.dark }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { elements = [], relationships = [] } = data;
+
+  const typeStyles = {
+    person: { color: COLORS.blue, icon: '👤', shape: 'person' },
+    system: { color: COLORS.cyan, icon: '🏢', shape: 'rect' },
+    container: { color: COLORS.green, icon: '📦', shape: 'rect' },
+    component: { color: COLORS.purple, icon: '⚙️', shape: 'rect' },
+    database: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
+    external: { color: COLORS.slate, icon: '🌐', shape: 'rect' },
+    default: { color: COLORS.cyan, icon: '🏗️', shape: 'rect' }
+  };
+
+  const layout = useMemo(() => {
+    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(elements.length))));
+    return elements.map((el, i) => ({
+      ...el,
+      id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      defaultX: 150 + (i % cols) * 240,
+      defaultY: 120 + Math.floor(i / cols) * 180,
+      style: typeStyles[el.type] || typeStyles.default
+    }));
+  }, [elements]);
+
+  const getPos = (el) => canvas.getNodePosition(el.id, el.defaultX, el.defaultY);
+
+  const contentBounds = useMemo(() => {
+    if (!layout.length) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(e => e.defaultX);
+    const ys = layout.map(e => e.defaultY);
+    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 80, width: Math.max(...xs) - Math.min(...xs) + 320, height: Math.max(...ys) - Math.min(...ys) + 260 };
+  }, [layout]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs><marker id="c4-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.cyan} /></marker></defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {relationships.map((rel, i) => {
+              const src = layout.find(e => e.id === rel.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              const tgt = layout.find(e => e.id === rel.to.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              if (!src || !tgt) return null;
+              const sp = getPos(src), tp = getPos(tgt);
+              const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+              const midX = (sp.x + tp.x) / 2, midY = (sp.y + tp.y) / 2;
+              const perpX = -dy / dist * 25, perpY = dx / dist * 25;
+              const path = `M ${sp.x + (dx/dist)*85} ${sp.y + (dy/dist)*60} Q ${midX + perpX} ${midY + perpY} ${tp.x - (dx/dist)*85} ${tp.y - (dy/dist)*60}`;
+              return (
+                <g key={i}>
+                  <path d={path} fill="none" stroke={COLORS.cyan} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#c4-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {rel.label && (
+                    <g>
+                      <rect x={midX + perpX - rel.label.length * 3.5 - 6} y={midY + perpY - 18} width={rel.label.length * 7 + 12} height={16} rx={4} fill="rgba(0,0,0,0.8)" />
+                      <text x={midX + perpX} y={midY + perpY - 7} textAnchor="middle" fill={COLORS.cyan} fontSize={10}>{rel.label}</text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {layout.map(el => {
+            const pos = getPos(el);
+            const isDragging = canvas.dragging === el.id;
+            const isPerson = el.style.shape === 'person';
+            return (
+              <div key={el.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 85, top: pos.y - 60, width: 170, height: 120, background: `${el.style.color}15`, border: `2px solid ${el.style.color}`, borderRadius: isPerson ? '50% 50% 12px 12px' : el.style.shape === 'cylinder' ? '50% / 15%' : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${el.style.color}50` : `0 4px 20px ${el.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div style={{ fontSize: '2rem', marginBottom: 6 }}>{el.style.icon}</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
+                {el.description && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 4 }}>{el.description}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+    </div>
+  );
+}
+
+// Requirements Diagram with traceability
+function RequirementDiagram({ data, theme = THEMES.dark }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { requirements = [], traces = [] } = data;
+
+  const priorityColors = {
+    critical: COLORS.red,
+    high: COLORS.orange,
+    medium: COLORS.amber,
+    low: COLORS.green
+  };
+
+  const layout = useMemo(() => {
+    const cols = Math.min(3, Math.max(2, Math.ceil(Math.sqrt(requirements.length))));
+    return requirements.map((req, i) => ({
+      ...req,
+      id: req.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+      defaultX: 150 + (i % cols) * 280,
+      defaultY: 100 + Math.floor(i / cols) * 160,
+      color: priorityColors[req.priority?.toLowerCase()] || COLORS.orange
+    }));
+  }, [requirements]);
+
+  const getPos = (req) => canvas.getNodePosition(req.id, req.defaultX, req.defaultY);
+
+  const contentBounds = useMemo(() => {
+    if (!layout.length) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(r => r.defaultX);
+    const ys = layout.map(r => r.defaultY);
+    return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 360, height: Math.max(...ys) - Math.min(...ys) + 220 };
+  }, [layout]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
+      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs><marker id="req-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.orange} /></marker></defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {traces.map((trace, i) => {
+              const src = layout.find(r => r.id === trace.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              const tgt = layout.find(r => r.id === trace.to.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+              if (!src || !tgt) return null;
+              const sp = getPos(src), tp = getPos(tgt);
+              const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
+              return (
+                <g key={i}>
+                  <line x1={sp.x + (dx/dist)*120} y1={sp.y + (dy/dist)*65} x2={tp.x - (dx/dist)*120} y2={tp.y - (dy/dist)*65} stroke={COLORS.orange} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#req-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {trace.label && <text x={(sp.x+tp.x)/2} y={(sp.y+tp.y)/2 - 8} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{trace.label}</text>}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {layout.map(req => {
+            const pos = getPos(req);
+            const isDragging = canvas.dragging === req.id;
+            return (
+              <div key={req.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, req.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, req.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 110, top: pos.y - 55, width: 220, height: 110, background: `${req.color}15`, border: `2px solid ${req.color}`, borderRadius: 12, padding: 12, cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${req.color}50` : `0 4px 20px ${req.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: '1.2rem' }}>📋</span>
+                  <span style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }}>{req.name}</span>
+                </div>
+                {req.text && <div style={{ fontSize: '0.75rem', color: theme.textSecondary, marginBottom: 6, lineHeight: 1.3 }}>{req.text}</div>}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {req.priority && <span style={{ fontSize: '0.65rem', padding: '2px 6px', background: `${req.color}30`, color: req.color, borderRadius: 4 }}>{req.priority}</span>}
+                  {req.risk && <span style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(255,255,255,0.1)', color: theme.textSecondary, borderRadius: 4 }}>Risk: {req.risk}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
@@ -2561,9 +2960,9 @@ export function UniversalDiagram({ type, data, source, theme = 'dark' }) {
     case 'wireframe': return <WireframeDiagram data={parsed} theme={t} />;
     case 'class': return <ClassDiagram data={parsed} theme={t} />;
     case 'usecase': return <UseCaseDiagram data={parsed} theme={t} />;
-    case 'component': return <SimpleCardDiagram items={parsed.components} title="Component Diagram" icon="📦" color={COLORS.purple} theme={t} />;
-    case 'c4': return <SimpleCardDiagram items={parsed.elements} title="C4 Context Diagram" icon="🏗️" color={COLORS.cyan} theme={t} />;
-    case 'requirement': return <SimpleCardDiagram items={parsed.requirements} title="Requirements" icon="📋" color={COLORS.orange} theme={t} />;
+    case 'component': return <ComponentDiagram data={parsed} theme={t} />;
+    case 'c4': return <C4Diagram data={parsed} theme={t} />;
+    case 'requirement': return <RequirementDiagram data={parsed} theme={t} />;
     default: return <div style={{ padding: 20, color: '#888' }}>Unknown: {type}</div>;
   }
 }
@@ -2635,12 +3034,12 @@ const DEMOS = {
 
 {badge:New} {success:Active} {warning:Review}
 </>`},
-  class: { title: '📐 Class', source: `class User\n+id: string\n+name: string\n+getFullName(): string\n\nclass Post\n+title: string\n+publish(): void` },
-  activity: { title: '🔄 Activity', source: `[start]\n:Open App;\n:Login;\n<Authenticated?>\n:Show Dashboard;\n[end]` },
+  class: { title: '📐 Class', source: `class User\n+id: string\n+name: string\n-password: string\n+login(): boolean\n+getPosts(): Post[]\n\nclass Post\n+id: string\n+title: string\n+content: string\n+userId: string\n+publish(): void\n\nUser --> Post : has many\nUser --* Post : owns` },
+  activity: { title: '🔄 Activity', source: `[start]\n:Open App;\n:Login;\n<Valid?>\n:Dashboard;\n:Error;\n[end]\n\nstart -> Open App\nOpen App -> Login\nLogin -> Valid?\nValid? -> Dashboard: Yes\nValid? -> Error: No\nDashboard -> end\nError -> Login` },
   usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)\n(View Reports)\n\nCustomer -> Browse Products\nCustomer -> Checkout\nAdmin -> Manage Inventory\nAdmin -> View Reports` },
-  component: { title: '📦 Component', source: `[component] Frontend\n[component] API Gateway\n[component] Auth Service\n[component] Database` },
-  c4: { title: '🏛️ C4', source: `[person] User: App customer\n[system] WebApp: Main app\n[system] API: Backend\n[database] DB: PostgreSQL` },
-  requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: high\n}` }
+  component: { title: '📦 Component', source: `[service] Frontend\n[api] API Gateway\n[service] Auth Service\n[database] Database\n[cache] Redis Cache\n\nFrontend --> API Gateway\nAPI Gateway --> Auth Service\nAPI Gateway --> Database\nAuth Service --> Redis Cache` },
+  c4: { title: '🏛️ C4', source: `[person] User: App customer\n[system] WebApp: Main application\n[container] API: REST Backend\n[database] DB: PostgreSQL\n[external] Email: SendGrid\n\nUser -> WebApp: Uses\nWebApp -> API: Calls\nAPI -> DB: Reads/Writes\nAPI -> Email: Sends` },
+  requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: critical\n}\n\nrequirement Performance {\ntext: Response under 200ms\nrisk: medium\npriority: high\n}\n\nLogin -> Security: derives\nSecurity -> Performance: traces` }
 };
 
 export default function Demo() {

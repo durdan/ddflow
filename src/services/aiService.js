@@ -391,17 +391,26 @@ Syntax:
 - [end] or end - end node
 - <Decision?> - decision diamond
 - :Action; or Action - action box
-- Connections with ->
+- Explicit connections: NodeLabel -> NodeLabel: EdgeLabel
+- For branching, define explicit edges after node definitions
 
-Example:
+Example (with branching):
 <!-- type: activity -->
 [start]
-:Receive Order;
-<Payment Valid?>
-:Process Payment;
-:Ship Order;
-:Send Confirmation;
+:Open App;
+:Login;
+<Authenticated?>
+:Show Dashboard;
+:Show Error;
 [end]
+
+start -> Open App
+Open App -> Login
+Login -> Authenticated?
+Authenticated? -> Show Dashboard: Yes
+Authenticated? -> Show Error: No
+Show Dashboard -> end
+Show Error -> Login
 
 ================================================================================
 20. COMPONENT DIAGRAM (type: component)
@@ -453,6 +462,7 @@ requirement Name {
   risk: Low/Medium/High
   priority: Low/Medium/High/Critical
 }
+- Trace relationships: Req1 -> Req2: relationship
 
 Example:
 <!-- type: requirement -->
@@ -467,6 +477,15 @@ requirement Data Encryption {
   risk: Medium
   priority: High
 }
+
+requirement Performance {
+  text: Response time under 200ms
+  risk: Low
+  priority: Medium
+}
+
+User Authentication -> Data Encryption: derives
+Data Encryption -> Performance: traces
 
 ================================================================================
 
