@@ -24,6 +24,7 @@ function debounce(fn, delay) {
 
 const THEMES = {
   dark: {
+    name: 'dark',
     background: 'linear-gradient(135deg, #0a0a0f, #1a1a2e, #0f0f1a)',
     canvasBg: 'rgba(0,0,0,0.4)',
     gridColor: 'rgba(124,58,237,0.04)',
@@ -32,8 +33,48 @@ const THEMES = {
     textMuted: '#555555',
     border: 'rgba(255,255,255,0.1)',
     surface: 'rgba(15, 23, 42, 0.95)',
+    headerBg: 'transparent',
+    toolbarBg: 'transparent',
+    editorBg: 'rgba(0,0,0,0.3)',
+    editorText: '#a78bfa',
+    buttonBg: 'rgba(255,255,255,0.05)',
+    buttonActiveBg: 'rgba(124,58,237,0.3)',
+    modalBg: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+    inputBg: 'rgba(0,0,0,0.3)',
+    logoGradient: 'linear-gradient(135deg, #fff, #a78bfa)',
+  },
+  light: {
+    name: 'light',
+    background: 'linear-gradient(135deg, #f8fafc, #e2e8f0, #f1f5f9)',
+    canvasBg: 'rgba(255,255,255,0.7)',
+    gridColor: 'rgba(124,58,237,0.08)',
+    textPrimary: '#1e293b',
+    textSecondary: '#64748b',
+    textMuted: '#94a3b8',
+    border: 'rgba(0,0,0,0.1)',
+    surface: 'rgba(255, 255, 255, 0.95)',
+    headerBg: 'rgba(255,255,255,0.8)',
+    toolbarBg: 'rgba(255,255,255,0.6)',
+    editorBg: 'rgba(255,255,255,0.95)',
+    editorText: '#7c3aed',
+    buttonBg: 'rgba(0,0,0,0.05)',
+    buttonActiveBg: 'rgba(124,58,237,0.2)',
+    modalBg: 'linear-gradient(135deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98))',
+    inputBg: 'rgba(255,255,255,0.9)',
+    logoGradient: 'linear-gradient(135deg, #1e293b, #7c3aed)',
   }
 };
+
+// Theme persistence helpers
+const THEME_STORAGE_KEY = 'ddflow_theme';
+function getSavedTheme() {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY) || 'dark';
+  } catch { return 'dark'; }
+}
+function saveTheme(theme) {
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch {}
+}
 
 const COLORS = {
   purple: '#7C3AED', blue: '#0EA5E9', green: '#10B981', orange: '#F59E0B',
@@ -805,40 +846,64 @@ const Parsers = {
   wireframe: (text) => {
     const elements = [];
     let y = 20, x = 20, containerStack = [], currentRow = null;
-    const width = 340;
-    
-    const getX = () => containerStack.length > 0 ? containerStack[containerStack.length - 1].x + 15 : x;
-    const getWidth = () => containerStack.length > 0 ? containerStack[containerStack.length - 1].width - 30 : width;
+    let sidebarMode = false, sidebarStartY = 0, mainContentEndY = 0;
+    const width = 480;
+    const sidebarWidth = 200;
+
+    const getX = () => {
+      if (sidebarMode) return width + 30;
+      return containerStack.length > 0 ? containerStack[containerStack.length - 1].x + 15 : x;
+    };
+    const getWidth = () => {
+      if (sidebarMode) return sidebarWidth;
+      return containerStack.length > 0 ? containerStack[containerStack.length - 1].width - 30 : width;
+    };
     
     text.split('\n').forEach((line, i) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return;
+      // Skip empty lines and comments (// or # without space after = comment, # with space = heading)
+      if (!trimmed || trimmed.startsWith('//')) return;
+      if (trimmed.startsWith('#') && !trimmed.startsWith('# ') && !trimmed.startsWith('## ') && !trimmed.startsWith('### ')) return;
       
       const currX = getX(), currW = getWidth();
       
       // Window/Frame: {Title}
       if (trimmed.match(/^\{(.+)\}$/)) {
-        elements.push({ id: `wf-${i}`, type: 'window', label: trimmed.slice(1, -1), x: currX, y, width: currW, height: 36 });
+        // Window spans full width including sidebar area
+        elements.push({ id: `wf-${i}`, type: 'window', label: trimmed.slice(1, -1), x: currX, y, width: width + sidebarWidth + 30, height: 36 });
         y += 46; return;
       }
       
       // Card start: <Card Title> or <card>
       if (trimmed.match(/^<(.+)>$/) && !trimmed.includes('/')) {
         const label = trimmed.slice(1, -1);
-        const card = { id: `wf-${i}`, type: 'card', label: label === 'card' ? '' : label, x: currX, y, width: currW, startY: y, children: [] };
+        // Check if this is a sidebar section (contains sidebar, aside, slip, cart, panel, etc.)
+        const isSidebar = /sidebar|aside|slip|cart|panel|summary/i.test(label);
+        if (isSidebar && !sidebarMode) {
+          sidebarMode = true;
+          mainContentEndY = y;
+          sidebarStartY = 80; // Start sidebar near top, after window
+          y = sidebarStartY;
+        }
+        const card = { id: `wf-${i}`, type: 'card', label: label === 'card' ? '' : label, x: currX, y, width: currW, startY: y, children: [], isSidebar };
         elements.push(card);
         containerStack.push(card);
         y += label && label !== 'card' ? 45 : 15;
         return;
       }
-      
-      // Card end: </card> or </>
-      if (trimmed === '</card>' || trimmed === '</>' || trimmed === '</Card>') {
+
+      // Card/Section end: </anything> or </>
+      if (trimmed.match(/^<\/(.*)>$/) || trimmed === '</>') {
         if (containerStack.length > 0) {
           const card = containerStack.pop();
-          card.height = y - card.startY + 15;
+          card.height = y - card.startY + 20;
+          // If closing a sidebar section, restore main content y position
+          if (card.isSidebar) {
+            sidebarMode = false;
+            y = Math.max(y, mainContentEndY);
+          }
         }
-        y += 15; return;
+        y += 25; return; // More space between sections
       }
       
       // Modal: {{Modal Title}}
@@ -850,7 +915,8 @@ const Parsers = {
       // Navbar: [[ item1 | item2 | item3 ]]
       if (trimmed.match(/^\[\[(.+)\]\]$/)) {
         const items = trimmed.slice(2, -2).split('|').map(s => s.trim());
-        elements.push({ id: `wf-${i}`, type: 'navbar', items, x: currX, y, width: currW, height: 44 });
+        // Navbar spans full width including sidebar area
+        elements.push({ id: `wf-${i}`, type: 'navbar', items, x: currX, y, width: width + sidebarWidth + 30, height: 44 });
         y += 54; return;
       }
       
@@ -1132,11 +1198,21 @@ const Parsers = {
       }
       
       // Original elements below:
-      
+
       // Window (already handled above)
-      
-      // Primary Button: [Label]
-      if (trimmed.match(/^\[(.+)\]$/) && !trimmed.match(/^\[_{2,}\]$/) && !trimmed.match(/^\[(x| )\]/i) && !trimmed.match(/^\[v\s/)) {
+
+      // Chat message/bubble: [User: message] or [Bot: message] or [ChatGPT: message] etc.
+      const chatMatch = trimmed.match(/^\[(\w+):\s*(.+)\]$/);
+      if (chatMatch) {
+        const sender = chatMatch[1];
+        const message = chatMatch[2];
+        const isUser = /user|me|you/i.test(sender);
+        elements.push({ id: `wf-${i}`, type: 'chat-message', sender, message, isUser, x: currX, y, width: currW });
+        y += 60; return;
+      }
+
+      // Primary Button: [Label] (but not chat messages or special elements)
+      if (trimmed.match(/^\[(.+)\]$/) && !trimmed.match(/^\[_{2,}\]$/) && !trimmed.match(/^\[(x| )\]/i) && !trimmed.match(/^\[v\s/) && !trimmed.includes(':')) {
         elements.push({ id: `wf-${i}`, type: 'button', variant: 'primary', label: trimmed.slice(1, -1), x: currX, y, width: 120, height: 36 });
         y += 48; return;
       }
@@ -2698,8 +2774,8 @@ function WireframeDiagram({ data, theme = THEMES.dark }) {
         
       case 'card':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12 }}>
-            {el.label && <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)', fontWeight: 600, color: theme.textPrimary, fontSize: '0.9rem' }}>{el.label}</div>}
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+            {el.label && <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', borderRadius: '12px 12px 0 0', fontWeight: 600, color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</div>}
           </div>
         );
         
@@ -2972,6 +3048,19 @@ function WireframeDiagram({ data, theme = THEMES.dark }) {
           </div>
         );
         
+      case 'chat-message':
+        const msgBg = el.isUser ? COLORS.blue : 'rgba(255,255,255,0.1)';
+        const msgAlign = el.isUser ? 'flex-end' : 'flex-start';
+        const msgRadius = el.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px';
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, display: 'flex', flexDirection: 'column', alignItems: msgAlign }}>
+            <span style={{ fontSize: '0.7rem', color: theme.textMuted, marginBottom: 4 }}>{el.sender}</span>
+            <div style={{ maxWidth: '75%', background: msgBg, padding: '10px 14px', borderRadius: msgRadius }}>
+              <span style={{ color: el.isUser ? '#fff' : theme.textPrimary, fontSize: '0.85rem', lineHeight: 1.4 }}>{el.message}</span>
+            </div>
+          </div>
+        );
+
       case 'button':
         const btnStyles = {
           primary: { bg: COLORS.blue, border: COLORS.blue, color: '#fff' },
@@ -4190,6 +4279,8 @@ export default function Demo() {
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
+  const [themeName, setThemeName] = useState(() => getSavedTheme());
+  const theme = THEMES[themeName] || THEMES.dark;
   const diagramRef = useRef(null);
   const autoSaveTimeoutRef = useRef(null);
   const isSyncingFromHistoryRef = useRef(false);
@@ -4380,6 +4471,14 @@ export default function Demo() {
     setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
   };
 
+  const handleToggleTheme = () => {
+    const newTheme = themeName === 'dark' ? 'light' : 'dark';
+    setThemeName(newTheme);
+    saveTheme(newTheme);
+    setExportStatus({ loading: false, message: `${newTheme === 'dark' ? 'Dark' : 'Light'} mode` });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
   // Export handlers
   const handleExportPNG = async () => {
     if (!diagramRef.current) return;
@@ -4449,14 +4548,17 @@ export default function Demo() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: THEMES.dark.background, fontFamily: 'system-ui', color: '#e0e0e0' }}>
-      <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <div style={{ minHeight: '100vh', background: theme.background, fontFamily: 'system-ui', color: theme.textPrimary, transition: 'background 0.3s ease, color 0.3s ease' }}>
+      <div style={{ padding: '12px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.headerBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, background: 'linear-gradient(135deg, #fff, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>DDFlow Diagram Engine</h1>
-          <p style={{ color: '#888', margin: 0, fontSize: '0.75rem' }}>22 types • All nodes draggable • Pan & Zoom • AI Powered</p>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, background: theme.logoGradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>DDFlow Diagram Engine</h1>
+          <p style={{ color: theme.textSecondary, margin: 0, fontSize: '0.75rem' }}>22 types • All nodes draggable • Pan & Zoom • AI Powered</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
+          <button onClick={handleToggleTheme} style={{ padding: '6px 12px', background: themeName === 'dark' ? 'rgba(251,191,36,0.2)' : 'rgba(99,102,241,0.2)', border: 'none', borderRadius: 20, color: themeName === 'dark' ? '#FBBF24' : '#6366F1', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }} title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}>
+            {themeName === 'dark' ? '☀️ Light' : '🌙 Dark'}
+          </button>
           <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 12px', background: 'rgba(245,158,11,0.2)', border: 'none', borderRadius: 20, color: '#F59E0B', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }} title="Keyboard Shortcuts (?)">
             ⌨️ Keys
           </button>
@@ -4469,9 +4571,9 @@ export default function Demo() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, padding: '8px 20px', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.1)', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 4, padding: '8px 20px', flexWrap: 'wrap', borderBottom: `1px solid ${theme.border}`, background: theme.toolbarBg, alignItems: 'center' }}>
         {Object.keys(DEMOS).map(key => (
-          <button key={key} onClick={() => handleTypeChange(key)} style={{ padding: '4px 8px', background: active === key ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${active === key ? COLORS.purple : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: active === key ? '#a78bfa' : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
+          <button key={key} onClick={() => handleTypeChange(key)} style={{ padding: '4px 8px', background: active === key ? theme.buttonActiveBg : theme.buttonBg, border: `1px solid ${active === key ? COLORS.purple : theme.border}`, borderRadius: 6, color: active === key ? '#a78bfa' : theme.textSecondary, fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
           <button onClick={undoHistory} disabled={!canUndo} style={{ padding: '4px 8px', background: canUndo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canUndo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canUndo ? COLORS.slate : '#444', fontSize: '0.65rem', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }} title="Undo (Cmd+Z)">↩ Undo</button>
@@ -4501,12 +4603,12 @@ export default function Demo() {
 
       <div style={{ display: 'flex', height: 'calc(100vh - 105px)' }}>
         {showEditor && (
-          <div style={{ width: 300, borderRight: '1px solid rgba(255,255,255,0.1)' }}>
-            <textarea value={source || demo.source} onChange={e => handleSourceChange(e.target.value)} style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: 'none', padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
+          <div style={{ width: 300, borderRight: `1px solid ${theme.border}` }}>
+            <textarea value={source || demo.source} onChange={e => handleSourceChange(e.target.value)} style={{ width: '100%', height: '100%', background: theme.editorBg, border: 'none', padding: 12, color: theme.editorText, fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box', transition: 'background 0.3s ease, color 0.3s ease' }} />
           </div>
         )}
         <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
-          <UniversalDiagram key={`${active}-${src}`} type={active} source={src} theme="dark" />
+          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} />
         </div>
       </div>
 

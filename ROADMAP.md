@@ -25,7 +25,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 - [x] **Recent files** - Quick access to recent diagrams ✅
 
 ### 1.4 Theme System
-- [ ] **Dark/Light toggle** - Switch between themes
+- [x] **Dark/Light toggle** - Switch between themes ✅
 - [ ] **Custom accent colors** - User-defined color scheme
 - [ ] **High contrast mode** - Accessibility option
 
@@ -177,7 +177,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 1: Editor | In Progress | 80% |
+| Phase 1: Editor | In Progress | 90% |
 | Phase 2: Diagram | Planned | 0% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
@@ -195,8 +195,9 @@ Priority order:
 2. ~~Keyboard Shortcuts~~ ✅ Complete
 3. ~~Save/Load (Local Storage)~~ ✅ Complete
 4. ~~Undo/Redo~~ ✅ Complete
-5. Theme Toggle ← Next
-6. History Panel (optional)
+5. ~~Theme Toggle~~ ✅ Complete
+6. History Panel ← Next (optional)
+7. Custom accent colors (optional)
 
 ---
 
