@@ -4,6 +4,18 @@ import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './servic
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
 import { mermaidToDDFlow, ddflowToMermaid, downloadMermaidFile, copyMermaidToClipboard, detectMermaidType } from './services/mermaidService.js';
+import useUndoRedo from './hooks/useUndoRedo.js';
+
+// Simple debounce utility
+function debounce(fn, delay) {
+  let timer = null;
+  const debounced = (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+  debounced.cancel = () => { if (timer) clearTimeout(timer); };
+  return debounced;
+}
 
 // ============================================
 // UNIVERSAL DIAGRAM ENGINE v8
@@ -4180,8 +4192,94 @@ export default function Demo() {
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
   const diagramRef = useRef(null);
   const autoSaveTimeoutRef = useRef(null);
+  const isSyncingFromHistoryRef = useRef(false);
   const demo = DEMOS[active];
   const src = showEditor && source ? source : demo.source;
+
+  // Undo/Redo history management
+  const {
+    state: historyState,
+    canUndo,
+    canRedo,
+    undo: undoHistory,
+    redo: redoHistory,
+    pushState,
+    reset: resetHistory,
+    isApplying
+  } = useUndoRedo({
+    type: active,
+    source: source || demo.source,
+    diagramName: diagramName
+  });
+
+  // Debounced function to push source changes to history
+  const debouncedPushSourceRef = useRef(null);
+  useEffect(() => {
+    debouncedPushSourceRef.current = debounce((newSource, type, name) => {
+      if (!isSyncingFromHistoryRef.current && !isApplying()) {
+        pushState({ type, source: newSource, diagramName: name }, 'source');
+      }
+    }, 1000);
+    return () => debouncedPushSourceRef.current?.cancel();
+  }, [pushState, isApplying]);
+
+  // Handle source change with history tracking
+  const handleSourceChange = useCallback((newSource) => {
+    setSource(newSource);
+    debouncedPushSourceRef.current?.(newSource, active, diagramName);
+  }, [active, diagramName]);
+
+  // Handle diagram type change with history tracking
+  const handleTypeChange = useCallback((newType) => {
+    debouncedPushSourceRef.current?.cancel();
+    setActive(newType);
+    setSource('');
+    pushState({ type: newType, source: '', diagramName }, 'type');
+  }, [pushState, diagramName]);
+
+  // Handle diagram name change with history tracking
+  const handleNameChange = useCallback((newName) => {
+    setDiagramName(newName);
+    // Don't push name changes to history for now (too noisy)
+  }, []);
+
+  // Sync history state back to component state when undo/redo
+  useEffect(() => {
+    if (isApplying()) {
+      isSyncingFromHistoryRef.current = true;
+      if (historyState.type !== active) {
+        setActive(historyState.type);
+      }
+      if (historyState.source !== source) {
+        setSource(historyState.source);
+      }
+      if (historyState.diagramName !== diagramName) {
+        setDiagramName(historyState.diagramName);
+      }
+      // Use setTimeout to reset the flag after React commits
+      setTimeout(() => { isSyncingFromHistoryRef.current = false; }, 0);
+    }
+  }, [historyState, isApplying]);
+
+  // Undo/Redo keyboard shortcuts (works even in textarea)
+  useEffect(() => {
+    const handleUndoRedoKeys = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+
+      if (metaKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redoHistory();
+        } else {
+          undoHistory();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleUndoRedoKeys);
+    return () => window.removeEventListener('keydown', handleUndoRedoKeys);
+  }, [undoHistory, redoHistory]);
 
   // Keyboard shortcut handlers
   const keyboardHandlers = useMemo(() => ({
@@ -4373,9 +4471,12 @@ export default function Demo() {
 
       <div style={{ display: 'flex', gap: 4, padding: '8px 20px', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.1)', alignItems: 'center' }}>
         {Object.keys(DEMOS).map(key => (
-          <button key={key} onClick={() => { setActive(key); setSource(''); }} style={{ padding: '4px 8px', background: active === key ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${active === key ? COLORS.purple : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: active === key ? '#a78bfa' : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
+          <button key={key} onClick={() => handleTypeChange(key)} style={{ padding: '4px 8px', background: active === key ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${active === key ? COLORS.purple : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: active === key ? '#a78bfa' : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <button onClick={undoHistory} disabled={!canUndo} style={{ padding: '4px 8px', background: canUndo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canUndo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canUndo ? COLORS.slate : '#444', fontSize: '0.65rem', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }} title="Undo (Cmd+Z)">↩ Undo</button>
+          <button onClick={redoHistory} disabled={!canRedo} style={{ padding: '4px 8px', background: canRedo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canRedo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canRedo ? COLORS.slate : '#444', fontSize: '0.65rem', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }} title="Redo (Cmd+Shift+Z)">↪ Redo</button>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
           {exportStatus.message && (
             <span style={{ padding: '4px 8px', background: exportStatus.message.startsWith('Error') ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)', borderRadius: 6, color: exportStatus.message.startsWith('Error') ? COLORS.red : COLORS.green, fontSize: '0.65rem' }}>
               {exportStatus.loading && '⏳ '}{exportStatus.message}
@@ -4401,7 +4502,7 @@ export default function Demo() {
       <div style={{ display: 'flex', height: 'calc(100vh - 105px)' }}>
         {showEditor && (
           <div style={{ width: 300, borderRight: '1px solid rgba(255,255,255,0.1)' }}>
-            <textarea value={source || demo.source} onChange={e => setSource(e.target.value)} style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: 'none', padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
+            <textarea value={source || demo.source} onChange={e => handleSourceChange(e.target.value)} style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: 'none', padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
           </div>
         )}
         <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>

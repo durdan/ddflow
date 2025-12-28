@@ -5,6 +5,8 @@ import { useEffect, useCallback } from 'react';
  * Keyboard shortcut definitions
  */
 export const SHORTCUTS = {
+  UNDO: { key: 'z', meta: true, description: 'Undo', category: 'Edit' },
+  REDO: { key: 'z', meta: true, shift: true, description: 'Redo', category: 'Edit' },
   ZOOM_IN: { key: '=', keyAlt: '+', description: 'Zoom in', category: 'View' },
   ZOOM_OUT: { key: '-', description: 'Zoom out', category: 'View' },
   RESET_VIEW: { key: 'r', description: 'Reset view', category: 'View' },

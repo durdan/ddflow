@@ -13,9 +13,9 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 - [~] **Copy to clipboard** - Basic export works, needs html2canvas for full support
 
 ### 1.2 Undo/Redo System
-- [ ] **Action history stack** - Track all changes
-- [ ] **Undo** (Cmd/Ctrl+Z) - Revert last action
-- [ ] **Redo** (Cmd/Ctrl+Shift+Z) - Restore undone action
+- [x] **Action history stack** - Track all changes ✅
+- [x] **Undo** (Cmd/Ctrl+Z) - Revert last action ✅
+- [x] **Redo** (Cmd/Ctrl+Shift+Z) - Restore undone action ✅
 - [ ] **History panel** - Visual list of changes
 
 ### 1.3 Save/Load
@@ -177,7 +177,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 1: Editor | In Progress | 60% |
+| Phase 1: Editor | In Progress | 80% |
 | Phase 2: Diagram | Planned | 0% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
@@ -194,8 +194,9 @@ Priority order:
 1. ~~Export Options~~ ⚠️ Partial (needs html2canvas for full support)
 2. ~~Keyboard Shortcuts~~ ✅ Complete
 3. ~~Save/Load (Local Storage)~~ ✅ Complete
-4. Undo/Redo ← Next
-5. Theme Toggle
+4. ~~Undo/Redo~~ ✅ Complete
+5. Theme Toggle ← Next
+6. History Panel (optional)
 
 ---
 
