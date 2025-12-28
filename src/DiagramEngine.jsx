@@ -1,5 +1,9 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import AIChatPanel from './components/AIChatPanel.jsx';
+import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
+import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
+import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
+import { mermaidToDDFlow, ddflowToMermaid, downloadMermaidFile, copyMermaidToClipboard, detectMermaidType } from './services/mermaidService.js';
 
 // ============================================
 // UNIVERSAL DIAGRAM ENGINE v8
@@ -258,6 +262,96 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
 }
 
 // ============================================
+// JOURNEY SECTION PARSER
+// ============================================
+
+function parseJourneySectionFormat(text) {
+  const result = {
+    format: 'sections',
+    title: '',
+    actors: [],
+    sections: []
+  };
+
+  let currentSection = null;
+
+  // Section colors for visual distinction
+  const sectionColors = [
+    COLORS.cyan,
+    COLORS.purple,
+    COLORS.orange,
+    COLORS.pink,
+    COLORS.emerald,
+    COLORS.amber,
+    COLORS.blue,
+    COLORS.red
+  ];
+
+  // Actor colors
+  const actorColors = {
+    'user': COLORS.pink,
+    'system': COLORS.blue,
+    'admin': COLORS.purple,
+    'customer': COLORS.cyan,
+    'default': COLORS.slate
+  };
+
+  text.split('\n').forEach(line => {
+    line = line.trim();
+    if (!line) return;
+
+    // Title
+    const titleMatch = line.match(/^title:\s*(.+)/i);
+    if (titleMatch) {
+      result.title = titleMatch[1].trim();
+      return;
+    }
+
+    // Actors
+    const actorsMatch = line.match(/^actors:\s*(.+)/i);
+    if (actorsMatch) {
+      result.actors = actorsMatch[1].split(',').map(a => {
+        const name = a.trim();
+        const color = actorColors[name.toLowerCase()] || actorColors.default;
+        return { name, color };
+      });
+      return;
+    }
+
+    // Section header: == Section Name ==
+    const sectionMatch = line.match(/^==\s*(.+?)\s*==$/);
+    if (sectionMatch) {
+      const sectionIndex = result.sections.length;
+      currentSection = {
+        name: sectionMatch[1],
+        color: sectionColors[sectionIndex % sectionColors.length],
+        tasks: []
+      };
+      result.sections.push(currentSection);
+      return;
+    }
+
+    // Task: - Task Name | score | actors
+    const taskMatch = line.match(/^-\s*(.+?)\s*\|\s*(\d+)(?:\s*\|\s*(.+))?$/);
+    if (taskMatch && currentSection) {
+      const taskName = taskMatch[1].trim();
+      const score = parseInt(taskMatch[2]);
+      const actorsStr = taskMatch[3] || '';
+      const actors = actorsStr ? actorsStr.split(',').map(a => a.trim()).filter(a => a) : [];
+
+      currentSection.tasks.push({
+        id: `task-${result.sections.length - 1}-${currentSection.tasks.length}`,
+        name: taskName,
+        score,
+        actors
+      });
+    }
+  });
+
+  return result;
+}
+
+// ============================================
 // PARSERS (condensed)
 // ============================================
 
@@ -310,7 +404,13 @@ const Parsers = {
       data: { color: COLORS.emerald, icon: '🗄️' }, cache: { color: COLORS.red, icon: '⚡' },
       queue: { color: COLORS.amber, icon: '📬' }, storage: { color: COLORS.emerald, icon: '💾' }
     };
-    let layerIndex = 0;
+    let currentY = 80;
+    const CANVAS_WIDTH = 1200; // Expanded canvas for more nodes
+    const MIN_SPACING = 150; // Minimum spacing between nodes
+    const NODE_WIDTH = 130;
+    const ROW_HEIGHT = 120; // Height between rows in same layer
+    const LAYER_GAP = 40; // Extra gap between different layers
+
     text.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
@@ -318,19 +418,41 @@ const Parsers = {
       if (layerMatch) {
         const style = typeStyles[layerMatch[1].toLowerCase()] || { color: COLORS.slate, icon: '📦' };
         const items = layerMatch[2].split(',').map(s => s.trim()).filter(s => s);
-        const startX = (900 - items.length * 190) / 2 + 70;
-        items.forEach((item, i) => {
-          const id = item.toLowerCase().replace(/[^a-z0-9]/g, '_');
-          nodes.set(id, { id, label: item, ...style, x: startX + i * 190, y: 80 + layerIndex * 150 });
+
+        // Calculate how many nodes fit per row
+        const maxNodesPerRow = Math.max(1, Math.floor((CANVAS_WIDTH - 100) / MIN_SPACING));
+        const rows = [];
+        for (let i = 0; i < items.length; i += maxNodesPerRow) {
+          rows.push(items.slice(i, i + maxNodesPerRow));
+        }
+
+        // Position nodes row by row
+        rows.forEach((rowItems, rowIndex) => {
+          // Calculate spacing for this row
+          const totalWidth = rowItems.length * NODE_WIDTH + (rowItems.length - 1) * (MIN_SPACING - NODE_WIDTH);
+          const spacing = rowItems.length <= 1 ? 0 : Math.max(MIN_SPACING, (CANVAS_WIDTH - 100) / rowItems.length);
+          const startX = (CANVAS_WIDTH - (rowItems.length - 1) * spacing) / 2;
+
+          rowItems.forEach((item, i) => {
+            const id = item.toLowerCase().replace(/[^a-z0-9]/g, '_');
+            nodes.set(id, { id, label: item, ...style, x: startX + i * spacing, y: currentY + rowIndex * ROW_HEIGHT });
+          });
         });
-        layerIndex++;
+
+        // Move to next layer position
+        currentY += rows.length * ROW_HEIGHT + LAYER_GAP;
         return;
       }
-      const parts = line.split(/\s*->\s*/);
-      if (parts.length >= 2) {
-        for (let i = 0; i < parts.length - 1; i++) {
-          edges.push({ id: `e-${edges.length}`, source: parts[i].trim().toLowerCase().replace(/[^a-z0-9]/g, '_'), target: parts[i + 1].trim().toLowerCase().replace(/[^a-z0-9]/g, '_') });
-        }
+      // Parse edges with optional labels: A -> B or A -> B: label
+      const edgeMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
+      if (edgeMatch) {
+        const [, source, target, label] = edgeMatch;
+        edges.push({
+          id: `e-${edges.length}`,
+          source: source.trim().toLowerCase().replace(/[^a-z0-9]/g, '_'),
+          target: target.trim().toLowerCase().replace(/[^a-z0-9]/g, '_'),
+          label: label?.trim() || ''
+        });
       }
     });
     return { nodes: Array.from(nodes.values()), edges };
@@ -422,6 +544,12 @@ const Parsers = {
   },
 
   userJourney: (text) => {
+    // Check if this is the new section-based format (from Mermaid)
+    if (text.includes('== ') || text.includes('title:') || text.includes('actors:')) {
+      return parseJourneySectionFormat(text);
+    }
+
+    // Legacy format support
     const nodes = [], edges = [];
     const nodeMap = new Map();
     const typeConfig = {
@@ -439,11 +567,11 @@ const Parsers = {
       milestone: { color: COLORS.green, icon: '🎯', shape: 'rect' },
       default: { color: COLORS.blue, icon: '📄', shape: 'rect' }
     };
-    
+
     text.split('\n').forEach((line) => {
       line = line.trim();
       if (!line || line.startsWith('#') || line.toLowerCase().startsWith('title')) return;
-      
+
       const nodeMatch = line.match(/^[\[(](\w+)[\])]\s*(.+?)(?:\s*:\s*(.+))?$/);
       if (nodeMatch && !line.includes('->')) {
         const type = nodeMatch[1].toLowerCase();
@@ -454,7 +582,7 @@ const Parsers = {
         if (!nodeMap.has(id)) nodeMap.set(id, { id, label, description, type, ...config, x: 0, y: 0 });
         return;
       }
-      
+
       const connMatch = line.match(/^(.+?)\s*-(?:([^>]+)->|->)\s*(.+?)$/);
       if (connMatch) {
         const sourceLabel = connMatch[1].trim(), edgeLabel = connMatch[2]?.trim() || '', targetLabel = connMatch[3].trim();
@@ -465,7 +593,7 @@ const Parsers = {
         edges.push({ id: `edge-${edges.length}`, source: sourceId, target: targetId, label: edgeLabel });
       }
     });
-    
+
     const nodesArr = Array.from(nodeMap.values());
     const levels = new Map(), visited = new Set();
     const hasIncoming = new Set(edges.map(e => e.target));
@@ -1287,7 +1415,20 @@ function ArchitectureDiagram({ data, theme = THEMES.dark }) {
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
-              return <line key={e.id} x1={sp.x + (dx / dist) * 55} y1={sp.y + (dy / dist) * 45} x2={tp.x - (dx / dist) * 55} y2={tp.y - (dy / dist) * 45} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#arch-arr)" opacity={0.7} />;
+              const x1 = sp.x + (dx / dist) * 55, y1 = sp.y + (dy / dist) * 45;
+              const x2 = tp.x - (dx / dist) * 55, y2 = tp.y - (dy / dist) * 45;
+              const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+              return (
+                <g key={e.id}>
+                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#arch-arr)" opacity={0.7} />
+                  {e.label && (
+                    <>
+                      <rect x={midX - 45} y={midY - 10} width={90} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
+                      <text x={midX} y={midY + 4} textAnchor="middle" fill={theme.textPrimary} fontSize="10" fontFamily="system-ui" fontWeight="500">{e.label}</text>
+                    </>
+                  )}
+                </g>
+              );
             })}
           </g>
         </svg>
@@ -1307,8 +1448,14 @@ function ArchitectureDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
-// User Journey with draggable nodes
+// User Journey with draggable nodes - supports both legacy and section-based formats
 function UserJourneyDiagram({ data, theme = THEMES.dark }) {
+  // Check if this is the new section-based format
+  if (data?.format === 'sections') {
+    return <JourneySectionDiagram data={data} theme={theme} />;
+  }
+
+  // Legacy format with nodes and edges
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { nodes, edges } = data;
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
@@ -1412,6 +1559,508 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
         </div>
       </div>
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+    </div>
+  );
+}
+
+// Modern Graphical Journey Visualization - flowing path with emotion curve
+function JourneySectionDiagram({ data, theme = THEMES.dark }) {
+  const { title, actors, sections } = data;
+  const containerRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ width: 1200, height: 600 });
+
+  // Flatten all tasks with section info for path calculation
+  const allTasks = useMemo(() => {
+    const tasks = [];
+    sections.forEach((section, si) => {
+      section.tasks.forEach((task, ti) => {
+        tasks.push({ ...task, section: section.name, sectionIndex: si, sectionColor: section.color });
+      });
+    });
+    return tasks;
+  }, [sections]);
+
+  // Update dimensions on mount
+  useEffect(() => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setDimensions({ width: Math.max(rect.width, 800), height: Math.max(rect.height - 80, 400) });
+    }
+  }, []);
+
+  // Calculate path points and node positions
+  const pathData = useMemo(() => {
+    const padding = { top: 120, bottom: 100, left: 80, right: 80 };
+    const availableWidth = Math.max(dimensions.width - padding.left - padding.right, allTasks.length * 150);
+    const availableHeight = dimensions.height - padding.top - padding.bottom;
+    const nodeSpacing = availableWidth / Math.max(allTasks.length - 1, 1);
+
+    // Create wave pattern for y positions (alternating up/down for visual interest)
+    const nodes = allTasks.map((task, i) => {
+      const x = padding.left + i * nodeSpacing;
+      // Wave pattern: nodes alternate between top and bottom of center
+      const waveAmplitude = availableHeight * 0.2;
+      const waveOffset = Math.sin(i * 0.8) * waveAmplitude;
+      const baseY = padding.top + availableHeight / 2;
+      const y = baseY + waveOffset;
+
+      return { ...task, x, y, index: i };
+    });
+
+    // Create smooth curve path through all nodes
+    let pathString = '';
+    if (nodes.length > 0) {
+      pathString = `M ${nodes[0].x} ${nodes[0].y}`;
+      for (let i = 1; i < nodes.length; i++) {
+        const prev = nodes[i - 1];
+        const curr = nodes[i];
+        const cpx1 = prev.x + (curr.x - prev.x) * 0.5;
+        const cpx2 = prev.x + (curr.x - prev.x) * 0.5;
+        pathString += ` C ${cpx1} ${prev.y}, ${cpx2} ${curr.y}, ${curr.x} ${curr.y}`;
+      }
+    }
+
+    // Calculate emotion curve (score line)
+    const emotionPath = nodes.map((node, i) => {
+      const scoreY = padding.top + 50 - (node.score - 1) * 12; // Score 5 = high, score 1 = low
+      return { x: node.x, y: scoreY, score: node.score };
+    });
+
+    let emotionPathString = '';
+    if (emotionPath.length > 0) {
+      emotionPathString = `M ${emotionPath[0].x} ${emotionPath[0].y}`;
+      for (let i = 1; i < emotionPath.length; i++) {
+        const prev = emotionPath[i - 1];
+        const curr = emotionPath[i];
+        const cpx = prev.x + (curr.x - prev.x) * 0.5;
+        emotionPathString += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
+      }
+    }
+
+    // Section boundaries for background gradients
+    const sectionBounds = [];
+    let currentSection = -1;
+    let sectionStart = 0;
+    nodes.forEach((node, i) => {
+      if (node.sectionIndex !== currentSection) {
+        if (currentSection >= 0) {
+          sectionBounds.push({
+            index: currentSection,
+            start: sectionStart,
+            end: node.x - nodeSpacing / 2,
+            color: sections[currentSection].color,
+            name: sections[currentSection].name
+          });
+        }
+        currentSection = node.sectionIndex;
+        sectionStart = i === 0 ? padding.left - 40 : node.x - nodeSpacing / 2;
+      }
+    });
+    // Add last section
+    if (currentSection >= 0) {
+      sectionBounds.push({
+        index: currentSection,
+        start: sectionStart,
+        end: padding.left + availableWidth + 40,
+        color: sections[currentSection].color,
+        name: sections[currentSection].name
+      });
+    }
+
+    return { nodes, pathString, emotionPathString, emotionPath, sectionBounds, padding, availableWidth };
+  }, [allTasks, dimensions, sections]);
+
+  // Score colors
+  const getScoreColor = (score) => {
+    const colors = { 1: '#ef4444', 2: '#f97316', 3: '#eab308', 4: '#22c55e', 5: '#10b981' };
+    return colors[score] || '#64748b';
+  };
+
+  // Actor styling
+  const getActorColor = (name) => {
+    const n = name.toLowerCase();
+    if (n.includes('user')) return COLORS.pink;
+    if (n.includes('system')) return COLORS.blue;
+    if (n.includes('admin')) return COLORS.purple;
+    return COLORS.cyan;
+  };
+
+  const getActorIcon = (name) => {
+    const n = name.toLowerCase();
+    if (n.includes('user')) return '👤';
+    if (n.includes('system')) return '⚙️';
+    if (n.includes('admin')) return '👨‍💼';
+    return '🧑';
+  };
+
+  const totalWidth = pathData.padding.left + pathData.availableWidth + pathData.padding.right;
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        background: `linear-gradient(180deg, ${theme.canvasBg} 0%, rgba(15,23,42,1) 100%)`,
+        borderRadius: 12,
+        border: `1px solid ${theme.border}`
+      }}
+    >
+      {/* Title Header */}
+      {title && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          left: 24,
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12
+        }}>
+          <div style={{
+            width: 40,
+            height: 40,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '1.2rem',
+            boxShadow: '0 4px 20px rgba(139,92,246,0.4)'
+          }}>
+            🚀
+          </div>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: theme.textPrimary }}>{title}</h2>
+            <p style={{ margin: 0, fontSize: '0.75rem', color: theme.textSecondary }}>{allTasks.length} steps across {sections.length} phases</p>
+          </div>
+        </div>
+      )}
+
+      {/* Actor Legend */}
+      {actors.length > 0 && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          right: 24,
+          zIndex: 10,
+          display: 'flex',
+          gap: 8
+        }}>
+          {actors.map((actor, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 14px',
+              borderRadius: 20,
+              background: `${getActorColor(actor.name)}15`,
+              border: `1px solid ${getActorColor(actor.name)}40`,
+              backdropFilter: 'blur(8px)'
+            }}>
+              <span style={{ fontSize: '0.9rem' }}>{getActorIcon(actor.name)}</span>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: getActorColor(actor.name) }}>{actor.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Scrollable SVG Canvas */}
+      <div style={{ width: '100%', height: '100%', overflowX: 'auto', overflowY: 'hidden' }}>
+        <svg
+          width={Math.max(totalWidth, dimensions.width)}
+          height={dimensions.height}
+          style={{ display: 'block' }}
+        >
+          <defs>
+            {/* Gradient for main path */}
+            <linearGradient id="pathGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor={COLORS.purple} />
+              <stop offset="50%" stopColor={COLORS.pink} />
+              <stop offset="100%" stopColor={COLORS.cyan} />
+            </linearGradient>
+
+            {/* Glow filter */}
+            <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+              <feMerge>
+                <feMergeNode in="coloredBlur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+
+            {/* Section gradients */}
+            {pathData.sectionBounds.map((section, i) => (
+              <linearGradient key={i} id={`sectionGrad${i}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor={section.color} stopOpacity="0.08" />
+                <stop offset="100%" stopColor={section.color} stopOpacity="0.02" />
+              </linearGradient>
+            ))}
+
+            {/* Emotion curve gradient */}
+            <linearGradient id="emotionGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#10b981" />
+              <stop offset="50%" stopColor="#eab308" />
+              <stop offset="100%" stopColor="#10b981" />
+            </linearGradient>
+          </defs>
+
+          {/* Section background panels */}
+          {pathData.sectionBounds.map((section, i) => (
+            <g key={`section-${i}`}>
+              <rect
+                x={section.start}
+                y={60}
+                width={section.end - section.start}
+                height={dimensions.height - 120}
+                rx={16}
+                fill={`url(#sectionGrad${i})`}
+              />
+              {/* Section label at top */}
+              <text
+                x={section.start + (section.end - section.start) / 2}
+                y={85}
+                textAnchor="middle"
+                fill={section.color}
+                fontSize="11"
+                fontWeight="600"
+                fontFamily="system-ui"
+                opacity="0.8"
+              >
+                {section.name.toUpperCase()}
+              </text>
+              {/* Section number badge */}
+              <circle
+                cx={section.start + 30}
+                cy={85}
+                r={12}
+                fill={section.color}
+                opacity="0.9"
+              />
+              <text
+                x={section.start + 30}
+                y={89}
+                textAnchor="middle"
+                fill="#fff"
+                fontSize="10"
+                fontWeight="700"
+                fontFamily="system-ui"
+              >
+                {i + 1}
+              </text>
+            </g>
+          ))}
+
+          {/* Emotion Curve (sentiment journey line) */}
+          <g>
+            {/* Background area under emotion curve */}
+            <path
+              d={pathData.emotionPathString + ` L ${pathData.emotionPath[pathData.emotionPath.length - 1]?.x || 0} ${pathData.padding.top + 60} L ${pathData.emotionPath[0]?.x || 0} ${pathData.padding.top + 60} Z`}
+              fill="url(#emotionGrad)"
+              opacity="0.1"
+            />
+            {/* Emotion curve line */}
+            <path
+              d={pathData.emotionPathString}
+              fill="none"
+              stroke="url(#emotionGrad)"
+              strokeWidth="2"
+              strokeDasharray="4,4"
+              opacity="0.6"
+            />
+            {/* Score dots on emotion curve */}
+            {pathData.emotionPath.map((point, i) => (
+              <circle
+                key={`emotion-${i}`}
+                cx={point.x}
+                cy={point.y}
+                r={4}
+                fill={getScoreColor(point.score)}
+                opacity="0.8"
+              />
+            ))}
+            {/* Emotion scale labels */}
+            <text x={pathData.padding.left - 45} y={pathData.padding.top + 10} fill={theme.textSecondary} fontSize="9" fontFamily="system-ui">😊 Great</text>
+            <text x={pathData.padding.left - 45} y={pathData.padding.top + 58} fill={theme.textSecondary} fontSize="9" fontFamily="system-ui">😞 Poor</text>
+          </g>
+
+          {/* Main Journey Path - glowing background */}
+          <path
+            d={pathData.pathString}
+            fill="none"
+            stroke="url(#pathGradient)"
+            strokeWidth="6"
+            strokeLinecap="round"
+            opacity="0.2"
+            filter="url(#glow)"
+          />
+
+          {/* Main Journey Path */}
+          <path
+            d={pathData.pathString}
+            fill="none"
+            stroke="url(#pathGradient)"
+            strokeWidth="3"
+            strokeLinecap="round"
+            opacity="0.8"
+          />
+
+          {/* Animated flowing particles */}
+          <path
+            d={pathData.pathString}
+            fill="none"
+            stroke="rgba(255,255,255,0.8)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray="8,40"
+            opacity="0.6"
+          >
+            <animate attributeName="stroke-dashoffset" from="48" to="0" dur="2s" repeatCount="indefinite" />
+          </path>
+
+          {/* Journey Nodes */}
+          {pathData.nodes.map((node, i) => {
+            const nodeSize = 48;
+            const actorColor = node.actors.length > 0 ? getActorColor(node.actors[0]) : node.sectionColor;
+
+            return (
+              <g key={node.id} style={{ cursor: 'pointer' }}>
+                {/* Node glow */}
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={nodeSize / 2 + 8}
+                  fill={actorColor}
+                  opacity="0.15"
+                  filter="url(#glow)"
+                />
+
+                {/* Node outer ring */}
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={nodeSize / 2 + 3}
+                  fill="none"
+                  stroke={actorColor}
+                  strokeWidth="2"
+                  opacity="0.5"
+                />
+
+                {/* Node background */}
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={nodeSize / 2}
+                  fill={`${theme.canvasBg}`}
+                  stroke={actorColor}
+                  strokeWidth="2"
+                />
+
+                {/* Score indicator ring */}
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={nodeSize / 2 - 4}
+                  fill="none"
+                  stroke={getScoreColor(node.score)}
+                  strokeWidth="3"
+                  strokeDasharray={`${(node.score / 5) * 100} 100`}
+                  transform={`rotate(-90 ${node.x} ${node.y})`}
+                  opacity="0.8"
+                />
+
+                {/* Step number */}
+                <text
+                  x={node.x}
+                  y={node.y + 4}
+                  textAnchor="middle"
+                  fill={theme.textPrimary}
+                  fontSize="14"
+                  fontWeight="700"
+                  fontFamily="system-ui"
+                >
+                  {i + 1}
+                </text>
+
+                {/* Actor icon badge */}
+                {node.actors.length > 0 && (
+                  <g>
+                    <circle
+                      cx={node.x + nodeSize / 2 - 4}
+                      cy={node.y - nodeSize / 2 + 4}
+                      r={10}
+                      fill={actorColor}
+                    />
+                    <text
+                      x={node.x + nodeSize / 2 - 4}
+                      y={node.y - nodeSize / 2 + 8}
+                      textAnchor="middle"
+                      fontSize="10"
+                    >
+                      {getActorIcon(node.actors[0])}
+                    </text>
+                  </g>
+                )}
+
+                {/* Task label below node */}
+                <foreignObject
+                  x={node.x - 70}
+                  y={node.y + nodeSize / 2 + 8}
+                  width="140"
+                  height="50"
+                >
+                  <div style={{
+                    textAlign: 'center',
+                    fontSize: '0.7rem',
+                    fontWeight: 500,
+                    color: theme.textPrimary,
+                    lineHeight: 1.3,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical'
+                  }}>
+                    {node.name}
+                  </div>
+                </foreignObject>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      {/* Bottom Legend */}
+      <div style={{
+        position: 'absolute',
+        bottom: 12,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        display: 'flex',
+        gap: 24,
+        padding: '8px 20px',
+        background: 'rgba(0,0,0,0.6)',
+        borderRadius: 20,
+        backdropFilter: 'blur(8px)',
+        border: '1px solid rgba(255,255,255,0.1)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 20, height: 3, background: 'linear-gradient(90deg, #8b5cf6, #ec4899, #06b6d4)', borderRadius: 2 }} />
+          <span style={{ fontSize: '0.7rem', color: theme.textSecondary }}>Journey Path</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 20, height: 2, background: '#22c55e', borderRadius: 2, opacity: 0.6 }} />
+          <span style={{ fontSize: '0.7rem', color: theme.textSecondary }}>Sentiment</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {[5, 4, 3, 2, 1].map(s => (
+            <div key={s} style={{ width: 8, height: 8, borderRadius: '50%', background: getScoreColor(s) }} />
+          ))}
+          <span style={{ fontSize: '0.7rem', color: theme.textSecondary, marginLeft: 4 }}>Score</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2968,6 +3617,481 @@ export function UniversalDiagram({ type, data, source, theme = 'dark' }) {
 }
 
 // ============================================
+// KEYBOARD SHORTCUTS MODAL
+// ============================================
+
+function KeyboardShortcutsModal({ isOpen, onClose }) {
+  if (!isOpen) return null;
+
+  const categories = getShortcutsByCategory();
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 10000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+          borderRadius: 16, padding: 24, maxWidth: 600, width: '90%', maxHeight: '80vh',
+          overflow: 'auto', border: '1px solid rgba(124,58,237,0.3)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+            ⌨️ Keyboard Shortcuts
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8,
+              padding: '6px 12px', color: '#888', cursor: 'pointer', fontSize: '0.875rem'
+            }}
+          >
+            ESC
+          </button>
+        </div>
+
+        <p style={{ color: '#888', fontSize: '0.75rem', marginBottom: 16 }}>
+          {isMac ? 'Using ⌘ (Command) for keyboard shortcuts' : 'Using Ctrl for keyboard shortcuts'}
+        </p>
+
+        {Object.entries(categories).map(([category, shortcuts]) => (
+          <div key={category} style={{ marginBottom: 20 }}>
+            <h3 style={{
+              margin: '0 0 8px 0', fontSize: '0.7rem', color: COLORS.purple,
+              textTransform: 'uppercase', letterSpacing: '0.1em'
+            }}>
+              {category}
+            </h3>
+            <div style={{ display: 'grid', gap: 6 }}>
+              {shortcuts.map(shortcut => (
+                <div
+                  key={shortcut.name}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 12px', background: 'rgba(255,255,255,0.03)',
+                    borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)'
+                  }}
+                >
+                  <span style={{ color: '#e0e0e0', fontSize: '0.8rem' }}>{shortcut.description}</span>
+                  <kbd style={{
+                    background: 'rgba(124,58,237,0.2)', padding: '4px 8px', borderRadius: 4,
+                    fontSize: '0.7rem', color: '#a78bfa', fontFamily: 'monospace',
+                    border: '1px solid rgba(124,58,237,0.3)'
+                  }}>
+                    {shortcut.formatted}
+                  </kbd>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ marginTop: 20, padding: 12, background: 'rgba(16,185,129,0.1)', borderRadius: 8, border: '1px solid rgba(16,185,129,0.2)' }}>
+          <p style={{ margin: 0, color: COLORS.green, fontSize: '0.75rem' }}>
+            💡 Tip: Press <kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4, margin: '0 4px' }}>?</kbd> anytime to show this help
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// RECENT FILES PANEL
+// ============================================
+
+function RecentFilesPanel({ isOpen, onClose, onSelect, onRemove }) {
+  const [files, setFiles] = useState([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setFiles(getRecentFiles());
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+          borderRadius: 16, padding: 24, maxWidth: 500, width: '90%', maxHeight: '70vh',
+          overflow: 'auto', border: '1px solid rgba(124,58,237,0.3)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+            📂 Recent Diagrams
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8,
+              padding: '6px 12px', color: '#888', cursor: 'pointer', fontSize: '0.875rem'
+            }}
+          >
+            ESC
+          </button>
+        </div>
+
+        {files.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#666' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📭</div>
+            <p style={{ margin: 0 }}>No recent diagrams</p>
+            <p style={{ margin: '8px 0 0 0', fontSize: '0.75rem' }}>Save a diagram to see it here</p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {files.map((file, i) => (
+              <div
+                key={`${file.name}-${i}`}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 16px', background: 'rgba(255,255,255,0.03)',
+                  borderRadius: 10, border: '1px solid rgba(255,255,255,0.05)',
+                  cursor: 'pointer', transition: 'all 0.2s'
+                }}
+                onClick={() => { onSelect(file); onClose(); }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(124,58,237,0.1)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+              >
+                <div style={{ fontSize: 24 }}>
+                  {DEMOS[file.type]?.title?.split(' ')[0] || '📄'}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#e0e0e0', fontWeight: 600, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {file.name}
+                  </div>
+                  <div style={{ color: '#666', fontSize: '0.7rem', display: 'flex', gap: 8 }}>
+                    <span>{file.type}</span>
+                    <span>•</span>
+                    <span>{formatDate(file.savedAt)}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemove(file.name); setFiles(f => f.filter(x => x.name !== file.name)); }}
+                  style={{
+                    background: 'rgba(239,68,68,0.1)', border: 'none', borderRadius: 6,
+                    padding: '4px 8px', color: COLORS.red, cursor: 'pointer', fontSize: '0.7rem'
+                  }}
+                  title="Remove from recent"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', gap: 8 }}>
+          <button
+            onClick={async () => {
+              try {
+                const diagram = await importFromFile();
+                onSelect(diagram);
+                onClose();
+              } catch (err) {
+                alert(err.message);
+              }
+            }}
+            style={{
+              flex: 1, padding: '10px 16px', background: 'rgba(16,185,129,0.2)',
+              border: '1px solid rgba(16,185,129,0.3)', borderRadius: 8,
+              color: COLORS.green, cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem'
+            }}
+          >
+            📁 Import .ddflow File
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mermaid Import Modal Component
+function MermaidImportModal({ isOpen, onClose, onImport }) {
+  const [mermaidSource, setMermaidSource] = useState('');
+  const [error, setError] = useState('');
+  const [preview, setPreview] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setMermaidSource('');
+      setError('');
+      setPreview(null);
+    }
+  }, [isOpen]);
+
+  const handlePreview = () => {
+    try {
+      setError('');
+      const result = mermaidToDDFlow(mermaidSource);
+      setPreview(result);
+    } catch (err) {
+      setError(err.message);
+      setPreview(null);
+    }
+  };
+
+  const handleImport = () => {
+    if (preview) {
+      onImport(preview.type, preview.source);
+      onClose();
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+          borderRadius: 16, padding: 24, maxWidth: 700, width: '90%', maxHeight: '85vh',
+          overflow: 'auto', border: '1px solid rgba(124,58,237,0.3)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+            🧜‍♀️ Import from Mermaid
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8,
+              padding: '6px 12px', color: '#888', cursor: 'pointer', fontSize: '0.875rem'
+            }}
+          >
+            ESC
+          </button>
+        </div>
+
+        <p style={{ color: '#888', fontSize: '0.8rem', marginBottom: 16 }}>
+          Paste your Mermaid diagram code below. Supported: flowchart, sequence, class, state, erDiagram, gantt, pie, gitGraph, journey, mindmap
+        </p>
+
+        <textarea
+          value={mermaidSource}
+          onChange={e => { setMermaidSource(e.target.value); setError(''); setPreview(null); }}
+          placeholder={`flowchart TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[OK]
+    B -->|No| D[Cancel]`}
+          style={{
+            width: '100%', height: 200, background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8,
+            padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace',
+            fontSize: '0.75rem', lineHeight: 1.5, resize: 'vertical', outline: 'none',
+            boxSizing: 'border-box'
+          }}
+        />
+
+        {error && (
+          <div style={{ marginTop: 12, padding: 12, background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)' }}>
+            <div style={{ color: COLORS.red, fontSize: '0.8rem' }}>❌ {error}</div>
+          </div>
+        )}
+
+        {preview && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ color: COLORS.green, fontSize: '0.85rem' }}>✅ Detected: <strong>{preview.type}</strong></span>
+            </div>
+            <div style={{
+              background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: 12,
+              border: '1px solid rgba(16,185,129,0.3)', maxHeight: 150, overflow: 'auto'
+            }}>
+              <pre style={{ margin: 0, color: '#a78bfa', fontSize: '0.7rem', fontFamily: 'Monaco, monospace', whiteSpace: 'pre-wrap' }}>
+                {preview.source}
+              </pre>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 20, display: 'flex', gap: 8 }}>
+          <button
+            onClick={handlePreview}
+            disabled={!mermaidSource.trim()}
+            style={{
+              flex: 1, padding: '10px 16px', background: 'rgba(124,58,237,0.2)',
+              border: '1px solid rgba(124,58,237,0.3)', borderRadius: 8,
+              color: COLORS.purple, cursor: mermaidSource.trim() ? 'pointer' : 'not-allowed',
+              fontWeight: 600, fontSize: '0.85rem', opacity: mermaidSource.trim() ? 1 : 0.5
+            }}
+          >
+            🔍 Preview Conversion
+          </button>
+          <button
+            onClick={handleImport}
+            disabled={!preview}
+            style={{
+              flex: 1, padding: '10px 16px', background: preview ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)',
+              border: `1px solid ${preview ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 8,
+              color: preview ? COLORS.green : '#666', cursor: preview ? 'pointer' : 'not-allowed',
+              fontWeight: 600, fontSize: '0.85rem'
+            }}
+          >
+            ✨ Import to Editor
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mermaid Export Modal Component
+function MermaidExportModal({ isOpen, onClose, diagramType, diagramSource }) {
+  const [mermaidSource, setMermaidSource] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && diagramType && diagramSource) {
+      try {
+        const result = ddflowToMermaid(diagramType, diagramSource);
+        setMermaidSource(result);
+        setError('');
+      } catch (err) {
+        setMermaidSource('');
+        setError(err.message);
+      }
+    }
+  }, [isOpen, diagramType, diagramSource]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setCopied(false);
+    }
+  }, [isOpen]);
+
+  const handleCopy = async () => {
+    try {
+      await copyMermaidToClipboard(mermaidSource);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      setError('Failed to copy: ' + err.message);
+    }
+  };
+
+  const handleDownload = () => {
+    downloadMermaidFile(mermaidSource, `ddflow-${diagramType}`);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)'
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+          borderRadius: 16, padding: 24, maxWidth: 600, width: '90%', maxHeight: '80vh',
+          overflow: 'auto', border: '1px solid rgba(124,58,237,0.3)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+            🧜‍♀️ Export as Mermaid
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8,
+              padding: '6px 12px', color: '#888', cursor: 'pointer', fontSize: '0.875rem'
+            }}
+          >
+            ESC
+          </button>
+        </div>
+
+        {error ? (
+          <div style={{ padding: 20, background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)' }}>
+            <div style={{ color: COLORS.red, fontSize: '0.85rem' }}>❌ {error}</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ color: COLORS.green, fontSize: '0.85rem' }}>✅ Converted from: <strong>{diagramType}</strong></span>
+            </div>
+
+            <div style={{
+              background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: 16,
+              border: '1px solid rgba(124,58,237,0.2)', maxHeight: 300, overflow: 'auto'
+            }}>
+              <pre style={{ margin: 0, color: '#a78bfa', fontSize: '0.75rem', fontFamily: 'Monaco, monospace', whiteSpace: 'pre-wrap' }}>
+                {mermaidSource}
+              </pre>
+            </div>
+
+            <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleCopy}
+                style={{
+                  flex: 1, padding: '10px 16px', background: copied ? 'rgba(16,185,129,0.3)' : 'rgba(14,165,233,0.2)',
+                  border: `1px solid ${copied ? 'rgba(16,185,129,0.3)' : 'rgba(14,165,233,0.3)'}`, borderRadius: 8,
+                  color: copied ? COLORS.green : COLORS.blue, cursor: 'pointer',
+                  fontWeight: 600, fontSize: '0.85rem'
+                }}
+              >
+                {copied ? '✅ Copied!' : '📋 Copy to Clipboard'}
+              </button>
+              <button
+                onClick={handleDownload}
+                style={{
+                  flex: 1, padding: '10px 16px', background: 'rgba(124,58,237,0.2)',
+                  border: '1px solid rgba(124,58,237,0.3)', borderRadius: 8,
+                  color: COLORS.purple, cursor: 'pointer',
+                  fontWeight: 600, fontSize: '0.85rem'
+                }}
+              >
+                📥 Download .mmd
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // DEMO
 // ============================================
 
@@ -3047,14 +4171,183 @@ export default function Demo() {
   const [source, setSource] = useState('');
   const [showEditor, setShowEditor] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showRecentFiles, setShowRecentFiles] = useState(false);
+  const [showMermaidImport, setShowMermaidImport] = useState(false);
+  const [showMermaidExport, setShowMermaidExport] = useState(false);
+  const [diagramName, setDiagramName] = useState('Untitled Diagram');
+  const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
+  const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
+  const diagramRef = useRef(null);
+  const autoSaveTimeoutRef = useRef(null);
   const demo = DEMOS[active];
   const src = showEditor && source ? source : demo.source;
+
+  // Keyboard shortcut handlers
+  const keyboardHandlers = useMemo(() => ({
+    HELP: () => setShowShortcuts(true),
+    HELP_ALT: () => setShowShortcuts(true),
+    TOGGLE_EDITOR: () => setShowEditor(prev => !prev),
+    TOGGLE_AI_CHAT: () => setShowAIChat(prev => !prev),
+    EXPORT_PNG: () => handleExportPNG(),
+    EXPORT_SVG: () => handleExportSVG(),
+    COPY_CLIPBOARD: () => handleCopyToClipboard(),
+  }), []);
+
+  useKeyboardShortcuts(keyboardHandlers, !showShortcuts);
+
+  // Load saved diagram on mount
+  useEffect(() => {
+    const saved = getCurrentDiagram();
+    if (saved) {
+      if (DEMOS[saved.type]) {
+        setActive(saved.type);
+        setSource(saved.source);
+        if (saved.name) setDiagramName(saved.name);
+        setShowEditor(true);
+      }
+    }
+  }, []);
+
+  // Auto-save effect (debounced)
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      const currentSource = source || demo.source;
+      saveCurrentDiagram(active, currentSource, diagramName);
+    }, 1000); // Save 1 second after last change
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [active, source, diagramName, autoSaveEnabled, demo.source]);
+
+  // Save handlers
+  const handleSave = () => {
+    const currentSource = source || demo.source;
+    saveCurrentDiagram(active, currentSource, diagramName);
+    setExportStatus({ loading: false, message: 'Saved!' });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
+  const handleExportFile = () => {
+    const currentSource = source || demo.source;
+    const filename = diagramName.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'diagram';
+    exportAsFile(active, currentSource, filename);
+    setExportStatus({ loading: false, message: 'File exported!' });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
+  const handleImportFile = async () => {
+    try {
+      setExportStatus({ loading: true, message: 'Importing...' });
+      const diagram = await importFromFile();
+      if (DEMOS[diagram.type]) {
+        setActive(diagram.type);
+        setSource(diagram.source);
+        setDiagramName(diagram.name || 'Imported Diagram');
+        setShowEditor(true);
+        setExportStatus({ loading: false, message: 'File imported!' });
+        setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+      } else {
+        throw new Error(`Unknown diagram type: ${diagram.type}`);
+      }
+    } catch (err) {
+      setExportStatus({ loading: false, message: `Error: ${err.message}` });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+    }
+  };
+
+  const handleSelectRecentFile = (file) => {
+    if (DEMOS[file.type]) {
+      setActive(file.type);
+      setSource(file.source);
+      setDiagramName(file.name || 'Recent Diagram');
+      setShowEditor(true);
+    }
+  };
+
+  const handleToggleAutoSave = () => {
+    const newValue = !autoSaveEnabled;
+    setAutoSaveEnabledState(newValue);
+    setAutoSaveEnabled(newValue);
+    setExportStatus({ loading: false, message: newValue ? 'Auto-save enabled' : 'Auto-save disabled' });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
+  // Export handlers
+  const handleExportPNG = async () => {
+    if (!diagramRef.current) return;
+    setExportStatus({ loading: true, message: 'Exporting PNG...' });
+    try {
+      await exportAsPNG(diagramRef.current, `ddflow-${active}`);
+      setExportStatus({ loading: false, message: 'PNG exported!' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+    } catch (err) {
+      setExportStatus({ loading: false, message: `Error: ${err.message}` });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+    }
+  };
+
+  const handleExportSVG = () => {
+    if (!diagramRef.current) return;
+    setExportStatus({ loading: true, message: 'Exporting SVG...' });
+    try {
+      exportAsSVG(diagramRef.current, `ddflow-${active}`);
+      setExportStatus({ loading: false, message: 'SVG exported!' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+    } catch (err) {
+      setExportStatus({ loading: false, message: `Error: ${err.message}` });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+    }
+  };
+
+  const handleCopyToClipboard = async () => {
+    if (!diagramRef.current) return;
+    setExportStatus({ loading: true, message: 'Copying to clipboard...' });
+    try {
+      await copyToClipboard(diagramRef.current);
+      setExportStatus({ loading: false, message: 'Copied to clipboard!' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+    } catch (err) {
+      setExportStatus({ loading: false, message: `Error: ${err.message}` });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (!diagramRef.current) return;
+    setExportStatus({ loading: true, message: 'Opening print dialog...' });
+    try {
+      exportAsPDF(diagramRef.current);
+      setExportStatus({ loading: false, message: '' });
+    } catch (err) {
+      setExportStatus({ loading: false, message: `Error: ${err.message}` });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+    }
+  };
 
   // Handle applying AI-generated diagram
   const handleApplyDiagram = (type, dsl) => {
     setActive(type);
     setSource(dsl);
     setShowEditor(true);
+  };
+
+  // Handle Mermaid import
+  const handleMermaidImport = (type, dsl) => {
+    setActive(type);
+    setSource(dsl);
+    setShowEditor(true);
+    setExportStatus({ loading: false, message: 'Mermaid imported!' });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
   };
 
   return (
@@ -3066,6 +4359,9 @@ export default function Demo() {
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
+          <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 12px', background: 'rgba(245,158,11,0.2)', border: 'none', borderRadius: 20, color: '#F59E0B', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }} title="Keyboard Shortcuts (?)">
+            ⌨️ Keys
+          </button>
           <a href="/guide.html" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 12px', background: 'rgba(16,185,129,0.2)', border: 'none', borderRadius: 20, color: '#10B981', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, textDecoration: 'none' }}>
             📖 Guide
           </a>
@@ -3079,7 +4375,27 @@ export default function Demo() {
         {Object.keys(DEMOS).map(key => (
           <button key={key} onClick={() => { setActive(key); setSource(''); }} style={{ padding: '4px 8px', background: active === key ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${active === key ? COLORS.purple : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: active === key ? '#a78bfa' : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
         ))}
-        <button onClick={() => setShowEditor(!showEditor)} style={{ marginLeft: 'auto', padding: '4px 8px', background: showEditor ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${showEditor ? COLORS.green : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showEditor ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{showEditor ? '✓ Editor' : '</>'}</button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          {exportStatus.message && (
+            <span style={{ padding: '4px 8px', background: exportStatus.message.startsWith('Error') ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)', borderRadius: 6, color: exportStatus.message.startsWith('Error') ? COLORS.red : COLORS.green, fontSize: '0.65rem' }}>
+              {exportStatus.loading && '⏳ '}{exportStatus.message}
+            </span>
+          )}
+          <button onClick={handleCopyToClipboard} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(14,165,233,0.2)', border: '1px solid rgba(14,165,233,0.3)', borderRadius: 6, color: COLORS.blue, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Copy to Clipboard">📋 Copy</button>
+          <button onClick={handleExportPNG} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(236,72,153,0.2)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, color: COLORS.pink, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as PNG">🖼️ PNG</button>
+          <button onClick={handleExportSVG} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 6, color: COLORS.violet, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as SVG">📐 SVG</button>
+          <button onClick={handleExportPDF} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(245,158,11,0.2)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, color: COLORS.orange, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as PDF">📄 PDF</button>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+          <button onClick={handleSave} style={{ padding: '4px 8px', background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, color: COLORS.green, fontSize: '0.65rem', cursor: 'pointer' }} title="Save to browser storage">💾 Save</button>
+          <button onClick={handleExportFile} style={{ padding: '4px 8px', background: 'rgba(59,130,246,0.2)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, color: '#3B82F6', fontSize: '0.65rem', cursor: 'pointer' }} title="Export as .ddflow file">📥 Export</button>
+          <button onClick={() => setShowRecentFiles(true)} style={{ padding: '4px 8px', background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 6, color: '#a78bfa', fontSize: '0.65rem', cursor: 'pointer' }} title="Open recent diagrams">📂 Open</button>
+          <button onClick={handleToggleAutoSave} style={{ padding: '4px 8px', background: autoSaveEnabled ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', border: `1px solid ${autoSaveEnabled ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: autoSaveEnabled ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }} title={autoSaveEnabled ? 'Auto-save is ON' : 'Auto-save is OFF'}>{autoSaveEnabled ? '🔄 Auto' : '⏸️ Auto'}</button>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+          <button onClick={() => setShowMermaidImport(true)} style={{ padding: '4px 8px', background: 'rgba(6,182,212,0.2)', border: '1px solid rgba(6,182,212,0.3)', borderRadius: 6, color: COLORS.cyan, fontSize: '0.65rem', cursor: 'pointer' }} title="Import from Mermaid">🧜‍♀️ Mermaid</button>
+          <button onClick={() => setShowMermaidExport(true)} style={{ padding: '4px 8px', background: 'rgba(168,85,247,0.2)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, color: '#A855F7', fontSize: '0.65rem', cursor: 'pointer' }} title="Export as Mermaid">📤 .mmd</button>
+          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+          <button onClick={() => setShowEditor(!showEditor)} style={{ padding: '4px 8px', background: showEditor ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${showEditor ? COLORS.green : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showEditor ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{showEditor ? '✓ Editor' : '</>'}</button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', height: 'calc(100vh - 105px)' }}>
@@ -3088,12 +4404,30 @@ export default function Demo() {
             <textarea value={source || demo.source} onChange={e => setSource(e.target.value)} style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: 'none', padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
           </div>
         )}
-        <div style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
+        <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
           <UniversalDiagram key={`${active}-${src}`} type={active} source={src} theme="dark" />
         </div>
       </div>
 
       <AIChatPanel isOpen={showAIChat} onClose={() => setShowAIChat(false)} onApplyDiagram={handleApplyDiagram} />
+      <KeyboardShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      <RecentFilesPanel
+        isOpen={showRecentFiles}
+        onClose={() => setShowRecentFiles(false)}
+        onSelect={handleSelectRecentFile}
+        onRemove={removeFromRecentFiles}
+      />
+      <MermaidImportModal
+        isOpen={showMermaidImport}
+        onClose={() => setShowMermaidImport(false)}
+        onImport={handleMermaidImport}
+      />
+      <MermaidExportModal
+        isOpen={showMermaidExport}
+        onClose={() => setShowMermaidExport(false)}
+        diagramType={active}
+        diagramSource={src}
+      />
     </div>
   );
 }
