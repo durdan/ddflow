@@ -102,6 +102,19 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const [dragging, setDragging] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
+  // Multi-select state
+  const [selectedNodes, setSelectedNodes] = useState(new Set());
+
+  // Inline editing state
+  const [editingNode, setEditingNode] = useState(null);
+  const [editValue, setEditValue] = useState('');
+
+  // Node colors state
+  const [nodeColors, setNodeColors] = useState({});
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null);
+
   // Touch state for pinch-to-zoom
   const lastTouchDistance = useRef(null);
   const lastTouchCenter = useRef(null);
@@ -125,10 +138,85 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
 
   const handleNodeMouseDown = useCallback((e, nodeId, nodeX, nodeY) => {
     e.stopPropagation();
+    // Close context menu if open
+    setContextMenu(null);
+
+    // Multi-select with Shift+click
+    if (e.shiftKey) {
+      setSelectedNodes(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(nodeId)) {
+          newSet.delete(nodeId);
+        } else {
+          newSet.add(nodeId);
+        }
+        return newSet;
+      });
+      return; // Don't start dragging on shift-click
+    }
+
+    // Regular click - clear selection and select only this node
+    setSelectedNodes(new Set([nodeId]));
     setDragging(nodeId);
     const point = getCanvasPoint(e.clientX, e.clientY);
     setDragOffset({ x: point.x - nodeX, y: point.y - nodeY });
   }, [getCanvasPoint]);
+
+  // Double-click to edit node label
+  const handleNodeDoubleClick = useCallback((e, nodeId, currentLabel) => {
+    e.stopPropagation();
+    setEditingNode(nodeId);
+    setEditValue(currentLabel || '');
+    setSelectedNodes(new Set([nodeId]));
+  }, []);
+
+  // Finish editing (called on Enter or blur)
+  const finishEditing = useCallback(() => {
+    const result = { nodeId: editingNode, newValue: editValue };
+    setEditingNode(null);
+    setEditValue('');
+    return result;
+  }, [editingNode, editValue]);
+
+  // Cancel editing (called on Escape)
+  const cancelEditing = useCallback(() => {
+    setEditingNode(null);
+    setEditValue('');
+  }, []);
+
+  // Context menu handler (right-click)
+  const handleNodeContextMenu = useCallback((e, nodeId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      nodeId,
+      x: e.clientX,
+      y: e.clientY
+    });
+    // Also select the node
+    if (!selectedNodes.has(nodeId)) {
+      setSelectedNodes(new Set([nodeId]));
+    }
+  }, [selectedNodes]);
+
+  // Close context menu
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Set node color
+  const setNodeColor = useCallback((nodeId, color) => {
+    setNodeColors(prev => ({
+      ...prev,
+      [nodeId]: color
+    }));
+    setContextMenu(null);
+  }, []);
+
+  // Clear selection
+  const clearSelection = useCallback(() => {
+    setSelectedNodes(new Set());
+  }, []);
 
   const handleMouseMove = useCallback((e) => {
     if (isPanning) {
@@ -278,6 +366,25 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     isPanning,
     dragging,
     positions,
+    // Multi-select
+    selectedNodes,
+    setSelectedNodes,
+    clearSelection,
+    // Inline editing
+    editingNode,
+    editValue,
+    setEditValue,
+    handleNodeDoubleClick,
+    finishEditing,
+    cancelEditing,
+    // Node colors
+    nodeColors,
+    setNodeColor,
+    // Context menu
+    contextMenu,
+    handleNodeContextMenu,
+    closeContextMenu,
+    // Existing handlers
     handleCanvasMouseDown,
     handleNodeMouseDown,
     handleMouseMove,
@@ -308,10 +415,186 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
       </div>
       <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: '0.7rem', zIndex: 100 }}>{Math.round(zoom * 100)}%</div>
       <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 6, padding: '6px 10px', color: '#666', fontSize: '0.65rem', zIndex: 100 }}>
-        Drag nodes • Scroll to zoom • Drag canvas to pan
+        Drag nodes • Double-click to edit • Right-click for colors • Shift+click to multi-select
       </div>
     </>
   );
+}
+
+// ============================================
+// COLOR PALETTE FOR NODE COLORS
+// ============================================
+
+const NODE_COLOR_PALETTE = [
+  { name: 'Purple', color: COLORS.purple },
+  { name: 'Blue', color: COLORS.blue },
+  { name: 'Green', color: COLORS.green },
+  { name: 'Orange', color: COLORS.orange },
+  { name: 'Pink', color: COLORS.pink },
+  { name: 'Red', color: COLORS.red },
+  { name: 'Cyan', color: COLORS.cyan },
+  { name: 'Teal', color: COLORS.teal },
+  { name: 'Indigo', color: COLORS.indigo },
+  { name: 'Rose', color: COLORS.rose },
+  { name: 'Slate', color: COLORS.slate },
+  { name: 'Default', color: null },
+];
+
+// ============================================
+// COLOR PICKER CONTEXT MENU
+// ============================================
+
+function ColorPickerMenu({ x, y, nodeId, onSelectColor, onClose, theme }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      style={{
+        position: 'fixed',
+        left: x,
+        top: y,
+        background: theme?.modalBg || 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+        border: `1px solid ${theme?.border || 'rgba(255,255,255,0.15)'}`,
+        borderRadius: 12,
+        padding: 12,
+        zIndex: 1000,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        minWidth: 160,
+      }}
+    >
+      <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+        Node Color
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+        {NODE_COLOR_PALETTE.map((c) => (
+          <button
+            key={c.name}
+            onClick={() => onSelectColor(nodeId, c.color)}
+            title={c.name}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              border: c.color ? `2px solid ${c.color}` : `2px dashed ${theme?.textMuted || '#555'}`,
+              background: c.color ? `${c.color}40` : 'transparent',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '0.7rem',
+              color: theme?.textMuted || '#666',
+            }}
+          >
+            {!c.color && '×'}
+          </button>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+        <button
+          onClick={onClose}
+          style={{
+            width: '100%',
+            padding: '6px 12px',
+            background: 'transparent',
+            border: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+            borderRadius: 6,
+            color: theme?.textSecondary || '#888',
+            fontSize: '0.75rem',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// EDITABLE NODE LABEL (Inline Editing)
+// ============================================
+
+function EditableNodeLabel({
+  isEditing,
+  value,
+  onChange,
+  onFinish,
+  onCancel,
+  style = {},
+  inputStyle = {},
+}) {
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      onFinish();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+
+  if (!isEditing) {
+    return <span style={style}>{value}</span>;
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onFinish}
+      onKeyDown={handleKeyDown}
+      style={{
+        background: 'rgba(0,0,0,0.5)',
+        border: '1px solid rgba(124,58,237,0.5)',
+        borderRadius: 4,
+        color: '#fff',
+        fontSize: 'inherit',
+        fontWeight: 'inherit',
+        textAlign: 'center',
+        padding: '2px 6px',
+        width: '100%',
+        minWidth: 60,
+        outline: 'none',
+        ...inputStyle,
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+// ============================================
+// SELECTION INDICATOR STYLE
+// ============================================
+
+function getSelectionStyle(isSelected) {
+  if (!isSelected) return {};
+  return {
+    boxShadow: '0 0 0 2px rgba(124,58,237,0.8), 0 0 12px rgba(124,58,237,0.4)',
+    outline: '2px solid transparent',
+  };
 }
 
 // ============================================
@@ -2154,7 +2437,7 @@ function JourneySectionDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Flow Diagram with draggable nodes
-function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
+function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, io: { color: COLORS.purple, icon: '📦' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
@@ -2166,10 +2449,44 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
     return { x: Math.min(...xs) - 100, y: Math.min(...ys) - 80, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 200 };
   }, [initNodes]);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const node = initNodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, initNodes, onLabelChange]);
+
+  // Handle Delete key to delete selected nodes
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !canvas.editingNode) {
+        if (canvas.selectedNodes.size > 0 && onDeleteNodes) {
+          e.preventDefault();
+          onDeleteNodes(Array.from(canvas.selectedNodes));
+          canvas.clearSelection();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas.selectedNodes, canvas.editingNode, canvas.clearSelection, onDeleteNodes]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
@@ -2205,15 +2522,64 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark }) {
           {initNodes.map(node => {
             const pos = getPos(node);
             const s = styles[node.type] || styles.default;
+            const nodeColor = canvas.nodeColors[node.id] || s.color;
             const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
+            const isEditing = canvas.editingNode === node.id;
             const isDiamond = node.type === 'decision';
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60, background: `${s.color}20`, border: `2px solid ${s.color}`, borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${s.color}50` : `0 4px 15px ${s.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' };
+            let style = {
+              position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60,
+              background: `${nodeColor}20`, border: `2px solid ${nodeColor}`,
+              borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              cursor: isDragging ? 'grabbing' : 'grab',
+              boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 15px ${nodeColor}20`,
+              transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
+            };
             if (isDiamond) { style.width = 70; style.height = 70; style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
-            return <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={style}><div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center' }}>{s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}<div style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div></div></div>;
+            return (
+              <div
+                key={node.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)}
+                style={style}
+              >
+                <div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center', width: '100%', padding: '0 8px' }}>
+                  {s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}
+                  <EditableNodeLabel
+                    isEditing={isEditing}
+                    value={isEditing ? canvas.editValue : node.label}
+                    onChange={canvas.setEditValue}
+                    onFinish={handleLabelEditFinish}
+                    onCancel={canvas.cancelEditing}
+                    style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}
+                  />
+                </div>
+              </div>
+            );
           })}
         </div>
       </div>
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.selectedNodes.size} selected • Delete to remove
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          onSelectColor={canvas.setNodeColor}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }
@@ -3655,7 +4021,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
 // MAIN COMPONENT
 // ============================================
 
-export function UniversalDiagram({ type, data, source, theme = 'dark' }) {
+export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes }) {
   const t = THEMES[theme] || THEMES.dark;
   const parsed = useMemo(() => {
     if (data) return data;
@@ -3694,9 +4060,9 @@ export function UniversalDiagram({ type, data, source, theme = 'dark' }) {
     case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} />;
     case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} />;
     case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} />;
-    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} />;
-    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} />;
-    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} />;
+    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
+    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
+    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
     case 'journey': return <UserJourneyDiagram data={parsed} theme={t} />;
     case 'timeline': return <TimelineDiagram events={parsed} theme={t} />;
     case 'sequence': return <SequenceDiagram data={parsed} theme={t} />;
@@ -4334,6 +4700,45 @@ export default function Demo() {
     // Don't push name changes to history for now (too noisy)
   }, []);
 
+  // Handle node label change from inline editing
+  const handleNodeLabelChange = useCallback((nodeId, oldLabel, newLabel) => {
+    if (!src || !oldLabel || !newLabel) return;
+    // Replace the old label with new label in the source
+    // Use regex to find and replace the label, being careful to match whole words
+    const escapedOld = oldLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escapedOld}\\b`, 'g');
+    const newSource = src.replace(regex, newLabel);
+    if (newSource !== src) {
+      setSource(newSource);
+      pushState({ type: active, source: newSource, diagramName }, 'label-edit');
+    }
+  }, [src, active, diagramName, pushState]);
+
+  // Handle delete nodes
+  const handleDeleteNodes = useCallback((nodeIds) => {
+    if (!src || !nodeIds || nodeIds.length === 0) return;
+    let newSource = src;
+    // For each node, try to remove the line that defines it
+    nodeIds.forEach(nodeId => {
+      // Common patterns: node definition lines
+      const lines = newSource.split('\n');
+      const filteredLines = lines.filter(line => {
+        const trimmed = line.trim();
+        // Check if line contains the node ID as a definition
+        if (trimmed.startsWith(nodeId + ':') || trimmed.startsWith(nodeId + ' ')) return false;
+        if (trimmed.match(new RegExp(`^\\[${nodeId}\\]`))) return false;
+        if (trimmed.match(new RegExp(`^${nodeId}\\s*->`))) return false;
+        if (trimmed.match(new RegExp(`->\\s*${nodeId}\\s*$`))) return false;
+        return true;
+      });
+      newSource = filteredLines.join('\n');
+    });
+    if (newSource !== src) {
+      setSource(newSource);
+      pushState({ type: active, source: newSource, diagramName }, 'delete-nodes');
+    }
+  }, [src, active, diagramName, pushState]);
+
   // Sync history state back to component state when undo/redo
   useEffect(() => {
     if (isApplying()) {
@@ -4608,7 +5013,7 @@ export default function Demo() {
           </div>
         )}
         <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
-          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} />
+          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} />
         </div>
       </div>
 

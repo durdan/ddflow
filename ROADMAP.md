@@ -42,8 +42,9 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 ## Phase 2: Diagram Improvements
 
 ### 2.1 Node Editing
-- [ ] **Inline label editing** - Double-click to edit
-- [ ] **Multi-select** - Shift+click to select multiple
+- [x] **Inline label editing** - Double-click to edit ✅
+- [x] **Multi-select** - Shift+click to select multiple ✅
+- [x] **Delete selected** - Delete/Backspace to remove ✅
 - [ ] **Group selection** - Drag box to select area
 - [ ] **Copy/Paste nodes** - Duplicate nodes
 
@@ -55,7 +56,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 - [ ] **Connection routing** - Smart path finding
 
 ### 2.3 Node Customization
-- [ ] **Color picker** - Custom node colors
+- [x] **Color picker** - Custom node colors (right-click) ✅
 - [ ] **Node resize** - Drag handles
 - [ ] **Custom icons** - Icon selector
 - [ ] **Node shapes** - Rectangle, circle, diamond, etc.
@@ -177,8 +178,8 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 1: Editor | In Progress | 90% |
-| Phase 2: Diagram | Planned | 0% |
+| Phase 1: Editor | Complete | 95% |
+| Phase 2: Diagram | In Progress | 30% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
 | Phase 5: Collaboration | Planned | 0% |
@@ -188,17 +189,19 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 
 ## Next Steps
 
-**Current Focus: Phase 1 - Editor Enhancements**
+**Current Focus: Phase 2 - Diagram Improvements**
 
-Priority order:
-1. ~~Export Options~~ ⚠️ Partial (needs html2canvas for full support)
-2. ~~Keyboard Shortcuts~~ ✅ Complete
-3. ~~Save/Load (Local Storage)~~ ✅ Complete
-4. ~~Undo/Redo~~ ✅ Complete
-5. ~~Theme Toggle~~ ✅ Complete
-6. History Panel ← Next (optional)
-7. Custom accent colors (optional)
+Completed:
+1. ~~Inline label editing~~ ✅ Double-click to edit
+2. ~~Multi-select~~ ✅ Shift+click to select multiple
+3. ~~Delete selected~~ ✅ Delete/Backspace key
+4. ~~Color picker~~ ✅ Right-click for colors
+
+Next priority:
+1. Group selection - Drag box to select area
+2. Copy/Paste nodes - Duplicate functionality
+3. Connection label editing
 
 ---
 
-*Last updated: December 2024*
+*Last updated: December 2025*
