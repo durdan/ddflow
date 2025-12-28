@@ -115,6 +115,17 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null);
 
+  // Clipboard state for copy/paste
+  const [clipboard, setClipboard] = useState(null);
+
+  // Drag-box selection state
+  const [selectionBox, setSelectionBox] = useState(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+
+  // Edge/Connection editing state
+  const [editingEdge, setEditingEdge] = useState(null);
+  const [edgeEditValue, setEdgeEditValue] = useState('');
+
   // Touch state for pinch-to-zoom
   const lastTouchDistance = useRef(null);
   const lastTouchCenter = useRef(null);
@@ -131,10 +142,17 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   // Mouse handlers
   const handleCanvasMouseDown = useCallback((e) => {
     if (e.target === canvasRef.current || e.target.classList.contains('canvas-bg')) {
-      setIsPanning(true);
-      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      // Shift+drag for selection box, otherwise pan
+      if (e.shiftKey) {
+        const point = getCanvasPoint(e.clientX, e.clientY);
+        setIsSelecting(true);
+        setSelectionBox({ startX: point.x, startY: point.y, endX: point.x, endY: point.y });
+      } else {
+        setIsPanning(true);
+        setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      }
     }
-  }, [pan]);
+  }, [pan, getCanvasPoint]);
 
   const handleNodeMouseDown = useCallback((e, nodeId, nodeX, nodeY) => {
     e.stopPropagation();
@@ -218,9 +236,76 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setSelectedNodes(new Set());
   }, []);
 
+  // Copy selected nodes to clipboard
+  const copySelectedNodes = useCallback((nodes) => {
+    if (selectedNodes.size === 0 || !nodes) return;
+    const nodesToCopy = nodes.filter(n => selectedNodes.has(n.id));
+    if (nodesToCopy.length === 0) return;
+    // Store nodes with their positions
+    const clipboardData = nodesToCopy.map(n => ({
+      ...n,
+      copiedX: positions[n.id]?.x ?? n.x,
+      copiedY: positions[n.id]?.y ?? n.y,
+    }));
+    setClipboard(clipboardData);
+    return clipboardData;
+  }, [selectedNodes, positions]);
+
+  // Paste nodes from clipboard (returns DSL snippet to add)
+  const pasteNodes = useCallback(() => {
+    if (!clipboard || clipboard.length === 0) return null;
+    // Offset pasted nodes slightly
+    const offset = 30;
+    return clipboard.map(n => ({
+      ...n,
+      id: `${n.id}_copy_${Date.now()}`,
+      x: n.copiedX + offset,
+      y: n.copiedY + offset,
+      label: n.label,
+    }));
+  }, [clipboard]);
+
+  // Edge double-click to edit label
+  const handleEdgeDoubleClick = useCallback((e, edgeId, currentLabel) => {
+    e.stopPropagation();
+    setEditingEdge(edgeId);
+    setEdgeEditValue(currentLabel || '');
+  }, []);
+
+  // Finish edge editing
+  const finishEdgeEditing = useCallback(() => {
+    const result = { edgeId: editingEdge, newValue: edgeEditValue };
+    setEditingEdge(null);
+    setEdgeEditValue('');
+    return result;
+  }, [editingEdge, edgeEditValue]);
+
+  // Cancel edge editing
+  const cancelEdgeEditing = useCallback(() => {
+    setEditingEdge(null);
+    setEdgeEditValue('');
+  }, []);
+
+  // Get nodes within selection box
+  const getNodesInSelectionBox = useCallback((nodes, box) => {
+    if (!box || !nodes) return [];
+    const minX = Math.min(box.startX, box.endX);
+    const maxX = Math.max(box.startX, box.endX);
+    const minY = Math.min(box.startY, box.endY);
+    const maxY = Math.max(box.startY, box.endY);
+
+    return nodes.filter(n => {
+      const pos = positions[n.id] || { x: n.x, y: n.y };
+      return pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY;
+    }).map(n => n.id);
+  }, [positions]);
+
   const handleMouseMove = useCallback((e) => {
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+    } else if (isSelecting && selectionBox) {
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      setSelectionBox(prev => ({ ...prev, endX: point.x, endY: point.y }));
     } else if (dragging) {
       const point = getCanvasPoint(e.clientX, e.clientY);
       setPositions(prev => ({
@@ -228,11 +313,13 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
         [dragging]: { x: point.x - dragOffset.x, y: point.y - dragOffset.y }
       }));
     }
-  }, [isPanning, panStart, dragging, dragOffset, getCanvasPoint]);
+  }, [isPanning, panStart, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint]);
 
   const handleMouseUp = useCallback(() => {
     setIsPanning(false);
     setDragging(null);
+    setIsSelecting(false);
+    setSelectionBox(null);
   }, []);
 
   // Touch handlers
@@ -384,6 +471,21 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     contextMenu,
     handleNodeContextMenu,
     closeContextMenu,
+    // Clipboard (copy/paste)
+    clipboard,
+    copySelectedNodes,
+    pasteNodes,
+    // Selection box (drag to select)
+    selectionBox,
+    isSelecting,
+    getNodesInSelectionBox,
+    // Edge editing
+    editingEdge,
+    edgeEditValue,
+    setEdgeEditValue,
+    handleEdgeDoubleClick,
+    finishEdgeEditing,
+    cancelEdgeEditing,
     // Existing handlers
     handleCanvasMouseDown,
     handleNodeMouseDown,
@@ -415,7 +517,7 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
       </div>
       <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: '0.7rem', zIndex: 100 }}>{Math.round(zoom * 100)}%</div>
       <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 6, padding: '6px 10px', color: '#666', fontSize: '0.65rem', zIndex: 100 }}>
-        Drag nodes • Double-click to edit • Right-click for colors • Shift+click to multi-select
+        Drag nodes • Double-click to edit • Shift+drag to box-select • ⌘C/⌘V copy/paste
       </div>
     </>
   );
@@ -2437,7 +2539,7 @@ function JourneySectionDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Flow Diagram with draggable nodes
-function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes }) {
+function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, io: { color: COLORS.purple, icon: '📦' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
@@ -2460,26 +2562,69 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
     }
   }, [canvas, initNodes, onLabelChange]);
 
-  // Handle Delete key to delete selected nodes
+  // Handle edge label edit complete
+  const handleEdgeLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEdgeEditing();
+    if (result.edgeId && onEdgeLabelChange) {
+      const edge = edges.find(e => e.id === result.edgeId);
+      onEdgeLabelChange(result.edgeId, edge?.label || '', result.newValue);
+    }
+  }, [canvas, edges, onEdgeLabelChange]);
+
+  // Handle keyboard shortcuts (Delete, Copy, Paste)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !canvas.editingNode) {
-        if (canvas.selectedNodes.size > 0 && onDeleteNodes) {
-          e.preventDefault();
-          onDeleteNodes(Array.from(canvas.selectedNodes));
-          canvas.clearSelection();
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+
+      // Don't handle shortcuts when editing
+      if (canvas.editingNode || canvas.editingEdge) return;
+
+      // Delete selected nodes
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+
+      // Copy (Cmd+C)
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(initNodes);
+        return;
+      }
+
+      // Paste (Cmd+V)
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) {
+          onPasteNodes(pastedNodes);
         }
+        return;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canvas.selectedNodes, canvas.editingNode, canvas.clearSelection, onDeleteNodes]);
+  }, [canvas, initNodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion - select nodes within box
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(initNodes, canvas.selectionBox);
+      if (nodeIds.length > 0) {
+        canvas.setSelectedNodes(new Set(nodeIds));
+      }
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, initNodes, canvas]);
 
   // Click on canvas to clear selection
   const handleCanvasClick = useCallback((e) => {
     if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
       canvas.clearSelection();
       canvas.closeContextMenu();
+      canvas.cancelEdgeEditing();
     }
   }, [canvas]);
 
@@ -2488,7 +2633,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
       <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
-        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible' }}>
           <defs><marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {edges.map(e => {
@@ -2503,21 +2648,74 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
               const curveOffset = Math.abs(dx) > 50 ? Math.sign(dy || 1) * 20 : 0;
               const path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
+              const isEditingThisEdge = canvas.editingEdge === e.id;
+              const labelText = isEditingThisEdge ? canvas.edgeEditValue : (e.label || '');
               return (
                 <g key={e.id}>
-                  <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" />
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
-                  {e.label && (
-                    <g>
-                      <rect x={midX - e.label.length * 3.5 - 6} y={midY + curveOffset - 10} width={e.label.length * 7 + 12} height={18} rx={9} fill="rgba(15,23,42,0.9)" stroke="rgba(124,58,237,0.4)" strokeWidth={1} />
-                      <text x={midX} y={midY + curveOffset + 4} textAnchor="middle" fill="#e0e0e0" fontSize={10} fontWeight={500}>{e.label}</text>
+                  {/* Invisible wider path for easier clicking */}
+                  <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} />
+                  <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite', pointerEvents: 'none' }} />
+                  {/* Edge label or edit input */}
+                  {(labelText || isEditingThisEdge) && (
+                    <g style={{ cursor: 'pointer' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }}>
+                      <rect x={midX - Math.max(labelText.length, 3) * 3.5 - 8} y={midY + curveOffset - 12} width={Math.max(labelText.length, 3) * 7 + 16} height={22} rx={11} fill={isEditingThisEdge ? 'rgba(124,58,237,0.3)' : 'rgba(15,23,42,0.9)'} stroke={isEditingThisEdge ? COLORS.purple : 'rgba(124,58,237,0.4)'} strokeWidth={isEditingThisEdge ? 2 : 1} />
+                      {!isEditingThisEdge && <text x={midX} y={midY + curveOffset + 4} textAnchor="middle" fill="#e0e0e0" fontSize={10} fontWeight={500}>{labelText}</text>}
+                    </g>
+                  )}
+                  {/* Add label hint when no label */}
+                  {!labelText && !isEditingThisEdge && (
+                    <g style={{ cursor: 'pointer', opacity: 0 }} className="edge-add-label" onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, ''); }}>
+                      <rect x={midX - 20} y={midY + curveOffset - 10} width={40} height={20} rx={10} fill="rgba(124,58,237,0.2)" />
+                      <text x={midX} y={midY + curveOffset + 4} textAnchor="middle" fill="#888" fontSize={9}>+ label</text>
                     </g>
                   )}
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)"
+                stroke={COLORS.purple}
+                strokeWidth={2}
+                strokeDasharray="5,5"
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
           </g>
         </svg>
+        {/* Edge label edit input (positioned in screen space) */}
+        {canvas.editingEdge && (() => {
+          const edge = edges.find(e => e.id === canvas.editingEdge);
+          if (!edge) return null;
+          const src = initNodes.find(n => n.id === edge.source), tgt = initNodes.find(n => n.id === edge.target);
+          if (!src || !tgt) return null;
+          const sp = getPos(src), tp = getPos(tgt);
+          const midX = (sp.x + tp.x) / 2, midY = (sp.y + tp.y) / 2;
+          const screenX = midX * canvas.zoom + canvas.pan.x;
+          const screenY = midY * canvas.zoom + canvas.pan.y;
+          return (
+            <div style={{ position: 'absolute', left: screenX - 50, top: screenY - 12, zIndex: 200 }}>
+              <input
+                autoFocus
+                type="text"
+                value={canvas.edgeEditValue}
+                onChange={(ev) => canvas.setEdgeEditValue(ev.target.value)}
+                onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); handleEdgeLabelEditFinish(); } else if (ev.key === 'Escape') { ev.preventDefault(); canvas.cancelEdgeEditing(); } }}
+                onBlur={handleEdgeLabelEditFinish}
+                placeholder="Label"
+                style={{ width: 100, padding: '4px 8px', background: 'rgba(15,23,42,0.95)', border: `2px solid ${COLORS.purple}`, borderRadius: 8, color: '#fff', fontSize: '0.75rem', textAlign: 'center', outline: 'none' }}
+                onClick={(ev) => ev.stopPropagation()}
+                onMouseDown={(ev) => ev.stopPropagation()}
+              />
+            </div>
+          );
+        })()}
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {initNodes.map(node => {
             const pos = getPos(node);
@@ -2566,7 +2764,13 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
-          {canvas.selectedNodes.size} selected • Delete to remove
+          {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && canvas.clipboard.length > 0 && canvas.selectedNodes.size === 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(16,185,129,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.clipboard.length} in clipboard • ⌘V to paste
         </div>
       )}
       {/* Context menu */}
@@ -4021,7 +4225,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
 // MAIN COMPONENT
 // ============================================
 
-export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes }) {
+export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange }) {
   const t = THEMES[theme] || THEMES.dark;
   const parsed = useMemo(() => {
     if (data) return data;
@@ -4060,9 +4264,9 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelCh
     case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} />;
     case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} />;
     case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} />;
-    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
-    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
-    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} />;
+    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
+    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
+    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
     case 'journey': return <UserJourneyDiagram data={parsed} theme={t} />;
     case 'timeline': return <TimelineDiagram events={parsed} theme={t} />;
     case 'sequence': return <SequenceDiagram data={parsed} theme={t} />;
@@ -4739,6 +4943,52 @@ export default function Demo() {
     }
   }, [src, active, diagramName, pushState]);
 
+  // Handle paste nodes - add new nodes to DSL
+  const handlePasteNodes = useCallback((pastedNodes) => {
+    if (!pastedNodes || pastedNodes.length === 0) return;
+    // Generate DSL lines for pasted nodes
+    const newLines = pastedNodes.map(n => {
+      // For flowchart-style: NodeId: Label
+      const typePrefix = n.type ? `[${n.type}] ` : '';
+      return `${n.id}: ${typePrefix}${n.label}`;
+    });
+    const newSource = src + '\n' + newLines.join('\n');
+    setSource(newSource);
+    pushState({ type: active, source: newSource, diagramName }, 'paste-nodes');
+  }, [src, active, diagramName, pushState]);
+
+  // Handle edge label change
+  const handleEdgeLabelChange = useCallback((edgeId, oldLabel, newLabel) => {
+    if (!src) return;
+    // For flowchart edges, try to find and update the connection line
+    // Common patterns: A -> B : label or A --> B |label|
+    const lines = src.split('\n');
+    const newLines = lines.map(line => {
+      // Check if this line contains a connection (->)
+      if (line.includes('->')) {
+        // Try to match: source -> target : oldLabel or source -> target |oldLabel|
+        if (oldLabel && line.includes(oldLabel)) {
+          return line.replace(oldLabel, newLabel);
+        }
+        // If adding new label to unlabeled edge
+        if (!oldLabel && newLabel) {
+          // Check if this is the right edge by looking for the edge pattern
+          const trimmed = line.trim();
+          // Add label to end of connection line
+          if (!trimmed.includes(':') && !trimmed.includes('|')) {
+            return line + ' : ' + newLabel;
+          }
+        }
+      }
+      return line;
+    });
+    const newSource = newLines.join('\n');
+    if (newSource !== src) {
+      setSource(newSource);
+      pushState({ type: active, source: newSource, diagramName }, 'edge-label');
+    }
+  }, [src, active, diagramName, pushState]);
+
   // Sync history state back to component state when undo/redo
   useEffect(() => {
     if (isApplying()) {
@@ -5013,7 +5263,7 @@ export default function Demo() {
           </div>
         )}
         <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
-          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} />
+          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} />
         </div>
       </div>
 
