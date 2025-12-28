@@ -122,6 +122,15 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   // Node colors state
   const [nodeColors, setNodeColors] = useState({});
 
+  // Node sizes state (for resize)
+  const [nodeSizes, setNodeSizes] = useState({});
+  const DEFAULT_NODE_SIZE = { width: 130, height: 60 };
+  const MIN_NODE_SIZE = { width: 80, height: 40 };
+  const MAX_NODE_SIZE = { width: 300, height: 200 };
+
+  // Resize state
+  const [resizing, setResizing] = useState(null); // { nodeId, handle, startX, startY, startWidth, startHeight }
+
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null);
 
@@ -333,6 +342,60 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setEdgeContextMenu(null);
   }, []);
 
+  // Get node size (custom or default)
+  const getNodeSize = useCallback((nodeId) => {
+    return nodeSizes[nodeId] || DEFAULT_NODE_SIZE;
+  }, [nodeSizes]);
+
+  // Start resizing a node
+  const handleResizeStart = useCallback((e, nodeId, handle) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const size = nodeSizes[nodeId] || DEFAULT_NODE_SIZE;
+    setResizing({
+      nodeId,
+      handle, // 'se' (southeast), 'e' (east), 's' (south)
+      startX: e.clientX,
+      startY: e.clientY,
+      startWidth: size.width,
+      startHeight: size.height
+    });
+  }, [nodeSizes]);
+
+  // Handle resize during mouse move (called from handleMouseMove)
+  const updateResize = useCallback((clientX, clientY) => {
+    if (!resizing) return;
+    const dx = (clientX - resizing.startX) / zoom;
+    const dy = (clientY - resizing.startY) / zoom;
+    let newWidth = resizing.startWidth;
+    let newHeight = resizing.startHeight;
+
+    if (resizing.handle.includes('e')) {
+      newWidth = Math.max(MIN_NODE_SIZE.width, Math.min(MAX_NODE_SIZE.width, resizing.startWidth + dx));
+    }
+    if (resizing.handle.includes('s')) {
+      newHeight = Math.max(MIN_NODE_SIZE.height, Math.min(MAX_NODE_SIZE.height, resizing.startHeight + dy));
+    }
+
+    // Snap to grid if enabled
+    if (snapToGrid) {
+      newWidth = Math.round(newWidth / GRID_SIZE) * GRID_SIZE;
+      newHeight = Math.round(newHeight / GRID_SIZE) * GRID_SIZE;
+      newWidth = Math.max(MIN_NODE_SIZE.width, newWidth);
+      newHeight = Math.max(MIN_NODE_SIZE.height, newHeight);
+    }
+
+    setNodeSizes(prev => ({
+      ...prev,
+      [resizing.nodeId]: { width: newWidth, height: newHeight }
+    }));
+  }, [resizing, zoom, snapToGrid, GRID_SIZE]);
+
+  // End resizing
+  const handleResizeEnd = useCallback(() => {
+    setResizing(null);
+  }, []);
+
   // Start drawing a connection from a node's port
   const handlePortMouseDown = useCallback((e, nodeId, portX, portY) => {
     e.stopPropagation();
@@ -379,6 +442,8 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const handleMouseMove = useCallback((e) => {
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+    } else if (resizing) {
+      updateResize(e.clientX, e.clientY);
     } else if (isConnecting) {
       const point = getCanvasPoint(e.clientX, e.clientY);
       setConnectionEnd({ x: point.x, y: point.y });
@@ -397,7 +462,7 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
         }
       }));
     }
-  }, [isPanning, panStart, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint, snapToGridValue]);
+  }, [isPanning, panStart, resizing, updateResize, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint, snapToGridValue]);
 
   // Complete connection on mouse up - returns connection info if valid
   const handleMouseUp = useCallback(() => {
@@ -412,6 +477,7 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
 
     setIsPanning(false);
     setDragging(null);
+    setResizing(null); // End resize
     setIsSelecting(false);
     setSelectionBox(null);
     setIsConnecting(false);
@@ -567,6 +633,11 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     // Node colors
     nodeColors,
     setNodeColor,
+    // Node sizes (resize)
+    nodeSizes,
+    getNodeSize,
+    resizing,
+    handleResizeStart,
     // Context menu
     contextMenu,
     handleNodeContextMenu,
@@ -3009,21 +3080,30 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
             const isDiamond = node.type === 'decision';
+            const isResizing = canvas.resizing?.nodeId === node.id;
+            // Get custom size or default
+            const nodeSize = canvas.getNodeSize(node.id);
+            const nodeWidth = isDiamond ? 70 : nodeSize.width;
+            const nodeHeight = isDiamond ? 70 : nodeSize.height;
             let style = {
-              position: 'absolute', left: pos.x - 65, top: pos.y - 30, width: 130, height: 60,
+              position: 'absolute',
+              left: pos.x - nodeWidth / 2,
+              top: pos.y - nodeHeight / 2,
+              width: nodeWidth,
+              height: nodeHeight,
               background: `${nodeColor}20`, border: `2px solid ${nodeColor}`,
               borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              cursor: isDragging ? 'grabbing' : 'grab',
+              cursor: isDragging ? 'grabbing' : isResizing ? 'nwse-resize' : 'grab',
               boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 15px ${nodeColor}20`,
-              transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
+              transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
             };
-            if (isDiamond) { style.width = 70; style.height = 70; style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
+            if (isDiamond) { style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
             const isConnectionTarget = canvas.isConnecting && canvas.connectionTarget === node.id;
             const canBeTarget = canvas.isConnecting && canvas.connectionStart?.nodeId !== node.id;
             // Calculate port positions (right side for outgoing, left for incoming)
-            const portRightX = isDiamond ? 35 : 65;
-            const portLeftX = isDiamond ? -35 : -65;
+            const portRightX = isDiamond ? 35 : nodeWidth / 2;
+            const portLeftX = isDiamond ? -35 : -nodeWidth / 2;
             return (
               <div
                 key={node.id}
@@ -3093,6 +3173,66 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                     pointerEvents: canBeTarget ? 'auto' : 'none'
                   }}
                 />
+                {/* Resize handles - show when selected (not for diamond) */}
+                {isSelected && !isDiamond && (
+                  <>
+                    {/* Southeast corner handle */}
+                    <div
+                      className="resize-handle resize-handle-se"
+                      onMouseDown={(e) => canvas.handleResizeStart(e, node.id, 'se')}
+                      style={{
+                        position: 'absolute',
+                        right: -6,
+                        bottom: -6,
+                        width: 12,
+                        height: 12,
+                        background: COLORS.purple,
+                        border: '2px solid #fff',
+                        borderRadius: 2,
+                        cursor: 'nwse-resize',
+                        zIndex: 20
+                      }}
+                    />
+                    {/* East edge handle */}
+                    <div
+                      className="resize-handle resize-handle-e"
+                      onMouseDown={(e) => canvas.handleResizeStart(e, node.id, 'e')}
+                      style={{
+                        position: 'absolute',
+                        right: -5,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: 10,
+                        height: 20,
+                        background: COLORS.purple,
+                        border: '2px solid #fff',
+                        borderRadius: 2,
+                        cursor: 'ew-resize',
+                        zIndex: 20,
+                        opacity: 0.7
+                      }}
+                    />
+                    {/* South edge handle */}
+                    <div
+                      className="resize-handle resize-handle-s"
+                      onMouseDown={(e) => canvas.handleResizeStart(e, node.id, 's')}
+                      style={{
+                        position: 'absolute',
+                        bottom: -5,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: 20,
+                        height: 10,
+                        background: COLORS.purple,
+                        border: '2px solid #fff',
+                        borderRadius: 2,
+                        cursor: 'ns-resize',
+                        zIndex: 20,
+                        opacity: 0.7
+                      }}
+                    />
+                  </>
+                )}
               </div>
             );
           })}
