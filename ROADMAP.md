@@ -62,7 +62,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 - [ ] **Node shapes** - Rectangle, circle, diamond, etc.
 
 ### 2.4 Layout Tools
-- [ ] **Snap to grid** - Magnetic alignment
+- [x] **Snap to grid** - Magnetic alignment with toggle button ✅
 - [ ] **Alignment guides** - Visual alignment helpers
 - [ ] **Auto-layout** - Automatic arrangement
 - [ ] **Distribute evenly** - Space nodes uniformly
@@ -179,7 +179,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 | Phase | Status | Progress |
 |-------|--------|----------|
 | Phase 1: Editor | Complete | 95% |
-| Phase 2: Diagram | In Progress | 65% |
+| Phase 2: Diagram | In Progress | 70% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
 | Phase 5: Collaboration | Planned | 0% |
@@ -200,11 +200,12 @@ Completed:
 6. ~~Copy/Paste~~ ✅ ⌘C/⌘V to duplicate
 7. ~~Connection labels~~ ✅ Double-click edges to edit
 8. ~~Connection styles~~ ✅ Right-click edges for solid/dashed/dotted
+9. ~~Snap to grid~~ ✅ Toggle button in canvas controls
 
 Next priority:
-1. Snap to grid - Magnetic alignment while dragging
-2. Node resize - Drag handles on nodes
-3. Auto-layout - Automatic arrangement
+1. Node resize - Drag handles on nodes
+2. Auto-layout - Automatic arrangement
+3. Alignment guides - Visual helpers
 
 ---
 

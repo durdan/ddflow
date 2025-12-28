@@ -102,6 +102,16 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const [dragging, setDragging] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
+  // Snap to grid state
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  const GRID_SIZE = 25;
+
+  // Snap a value to the nearest grid point
+  const snapToGridValue = useCallback((value) => {
+    if (!snapToGrid) return value;
+    return Math.round(value / GRID_SIZE) * GRID_SIZE;
+  }, [snapToGrid, GRID_SIZE]);
+
   // Multi-select state
   const [selectedNodes, setSelectedNodes] = useState(new Set());
 
@@ -377,12 +387,17 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
       setSelectionBox(prev => ({ ...prev, endX: point.x, endY: point.y }));
     } else if (dragging) {
       const point = getCanvasPoint(e.clientX, e.clientY);
+      const newX = point.x - dragOffset.x;
+      const newY = point.y - dragOffset.y;
       setPositions(prev => ({
         ...prev,
-        [dragging]: { x: point.x - dragOffset.x, y: point.y - dragOffset.y }
+        [dragging]: {
+          x: snapToGridValue(newX),
+          y: snapToGridValue(newY)
+        }
       }));
     }
-  }, [isPanning, panStart, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint]);
+  }, [isPanning, panStart, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint, snapToGridValue]);
 
   // Complete connection on mouse up - returns connection info if valid
   const handleMouseUp = useCallback(() => {
@@ -586,6 +601,9 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     cancelConnection,
     setConnectionTargetNode,
     clearConnectionTarget,
+    // Snap to grid
+    snapToGrid,
+    setSnapToGrid,
     // Existing handlers
     handleCanvasMouseDown,
     handleNodeMouseDown,
@@ -607,13 +625,36 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
 // CANVAS CONTROLS
 // ============================================
 
-function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
+function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom, snapToGrid, onToggleSnap }) {
   return (
     <>
       <div style={{ position: 'absolute', bottom: 12, left: 12, display: 'flex', gap: 6, zIndex: 100 }}>
         {[{ l: '+', a: onZoomIn }, { l: '−', a: onZoomOut }, { l: 'Fit', a: onFit }, { l: 'Reset', a: onReset }].map(b => (
           <button key={b.l} onClick={b.a} style={{ minWidth: b.l.length > 1 ? 'auto' : 36, height: 36, padding: b.l.length > 1 ? '0 12px' : 0, background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, color: '#fff', fontSize: b.l.length > 1 ? '0.75rem' : '1.2rem', cursor: 'pointer' }}>{b.l}</button>
         ))}
+        {onToggleSnap && (
+          <button
+            onClick={onToggleSnap}
+            title={snapToGrid ? 'Snap to grid: ON' : 'Snap to grid: OFF'}
+            style={{
+              minWidth: 36,
+              height: 36,
+              padding: '0 10px',
+              background: snapToGrid ? 'rgba(124,58,237,0.5)' : 'rgba(0,0,0,0.7)',
+              border: `1px solid ${snapToGrid ? COLORS.purple : 'rgba(255,255,255,0.2)'}`,
+              borderRadius: 8,
+              color: '#fff',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>⊞</span>
+            <span>{snapToGrid ? 'ON' : 'OFF'}</span>
+          </button>
+        )}
       </div>
       <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: '0.7rem', zIndex: 100 }}>{Math.round(zoom * 100)}%</div>
       <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 6, padding: '6px 10px', color: '#666', fontSize: '0.65rem', zIndex: 100 }}>
@@ -3057,7 +3098,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
