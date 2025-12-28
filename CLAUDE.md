@@ -22,6 +22,41 @@ npm run build      # Build for production
 npm test           # Run tests
 ```
 
+## AI Chat Configuration
+
+DDFlow includes an AI-powered chat interface that generates diagrams from natural language descriptions.
+
+### Setup
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Configure your AI provider in `.env`:
+   ```env
+   # Choose provider: "openai" or "anthropic"
+   VITE_AI_PROVIDER=openai
+
+   # Add your API key
+   VITE_OPENAI_API_KEY=sk-your-key-here
+   # OR
+   VITE_ANTHROPIC_API_KEY=sk-ant-your-key-here
+   ```
+
+3. Restart the dev server
+
+### Usage
+
+1. Click the "AI Chat" button in the header
+2. Describe the diagram you want (e.g., "Create a flowchart for user authentication")
+3. Click "Apply" to render the generated diagram
+
+### Files
+
+- `src/services/aiService.js` - LLM API integration (OpenAI + Anthropic)
+- `src/components/AIChatPanel.jsx` - Chat UI component
+
 ## Architecture
 
 ### Single-File Engine

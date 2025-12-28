@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useCallback } from 'react';
+import AIChatPanel from './components/AIChatPanel.jsx';
 
 // ============================================
 // UNIVERSAL DIAGRAM ENGINE v8
@@ -2646,17 +2647,30 @@ export default function Demo() {
   const [active, setActive] = useState('journey');
   const [source, setSource] = useState('');
   const [showEditor, setShowEditor] = useState(false);
+  const [showAIChat, setShowAIChat] = useState(false);
   const demo = DEMOS[active];
   const src = showEditor && source ? source : demo.source;
+
+  // Handle applying AI-generated diagram
+  const handleApplyDiagram = (type, dsl) => {
+    setActive(type);
+    setSource(dsl);
+    setShowEditor(true);
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: THEMES.dark.background, fontFamily: 'system-ui', color: '#e0e0e0' }}>
       <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, background: 'linear-gradient(135deg, #fff, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>Universal Diagram Engine v8</h1>
-          <p style={{ color: '#888', margin: 0, fontSize: '0.75rem' }}>22 types • All nodes draggable • Pan & Zoom</p>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, background: 'linear-gradient(135deg, #fff, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>DDFlow Diagram Engine</h1>
+          <p style={{ color: '#888', margin: 0, fontSize: '0.75rem' }}>22 types • All nodes draggable • Pan & Zoom • AI Powered</p>
         </div>
-        <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
+          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 12px', background: showAIChat ? 'linear-gradient(135deg, #7C3AED, #6366F1)' : 'rgba(124,58,237,0.2)', border: 'none', borderRadius: 20, color: '#fff', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+            🤖 AI Chat
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 4, padding: '8px 20px', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.1)', alignItems: 'center' }}>
@@ -2672,10 +2686,12 @@ export default function Demo() {
             <textarea value={source || demo.source} onChange={e => setSource(e.target.value)} style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: 'none', padding: 12, color: '#a78bfa', fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box' }} />
           </div>
         )}
-        <div style={{ flex: 1, padding: 10 }}>
+        <div style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
           <UniversalDiagram key={`${active}-${src}`} type={active} source={src} theme="dark" />
         </div>
       </div>
+
+      <AIChatPanel isOpen={showAIChat} onClose={() => setShowAIChat(false)} onApplyDiagram={handleApplyDiagram} />
     </div>
   );
 }
