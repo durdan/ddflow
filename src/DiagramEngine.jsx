@@ -132,6 +132,12 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const [connectionEnd, setConnectionEnd] = useState(null); // { x, y } - mouse position
   const [connectionTarget, setConnectionTarget] = useState(null); // nodeId being hovered
 
+  // Edge styles state (solid, dashed, dotted, animated)
+  const [edgeStyles, setEdgeStyles] = useState({});
+
+  // Edge context menu state
+  const [edgeContextMenu, setEdgeContextMenu] = useState(null);
+
   // Touch state for pinch-to-zoom
   const lastTouchDistance = useRef(null);
   const lastTouchCenter = useRef(null);
@@ -290,6 +296,31 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const cancelEdgeEditing = useCallback(() => {
     setEditingEdge(null);
     setEdgeEditValue('');
+  }, []);
+
+  // Edge context menu handler (right-click on edge)
+  const handleEdgeContextMenu = useCallback((e, edgeId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEdgeContextMenu({
+      edgeId,
+      x: e.clientX,
+      y: e.clientY
+    });
+  }, []);
+
+  // Close edge context menu
+  const closeEdgeContextMenu = useCallback(() => {
+    setEdgeContextMenu(null);
+  }, []);
+
+  // Set edge style
+  const setEdgeStyle = useCallback((edgeId, style) => {
+    setEdgeStyles(prev => ({
+      ...prev,
+      [edgeId]: style
+    }));
+    setEdgeContextMenu(null);
   }, []);
 
   // Start drawing a connection from a node's port
@@ -540,6 +571,12 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     handleEdgeDoubleClick,
     finishEdgeEditing,
     cancelEdgeEditing,
+    // Edge styles and context menu
+    edgeStyles,
+    setEdgeStyle,
+    edgeContextMenu,
+    handleEdgeContextMenu,
+    closeEdgeContextMenu,
     // Connection drawing (drag from node to node)
     isConnecting,
     connectionStart,
@@ -580,7 +617,7 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
       </div>
       <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: '0.7rem', zIndex: 100 }}>{Math.round(zoom * 100)}%</div>
       <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 6, padding: '6px 10px', color: '#666', fontSize: '0.65rem', zIndex: 100 }}>
-        Drag nodes • Drag port to connect • Double-click to edit • Shift+drag to select • ⌘C/⌘V copy/paste
+        Drag nodes • Drag port to connect • Double-click to edit • Right-click for styles • Shift+drag to select
       </div>
     </>
   );
@@ -664,6 +701,101 @@ function ColorPickerMenu({ x, y, nodeId, onSelectColor, onClose, theme }) {
             {!c.color && '×'}
           </button>
         ))}
+      </div>
+      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+        <button
+          onClick={onClose}
+          style={{
+            width: '100%',
+            padding: '6px 12px',
+            background: 'transparent',
+            border: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+            borderRadius: 6,
+            color: theme?.textSecondary || '#888',
+            fontSize: '0.75rem',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// EDGE STYLE OPTIONS
+// ============================================
+
+const EDGE_STYLE_OPTIONS = [
+  { name: 'Animated', style: 'animated', icon: '〰️', dasharray: '8,4', animated: true },
+  { name: 'Dashed', style: 'dashed', icon: '┅', dasharray: '8,4', animated: false },
+  { name: 'Dotted', style: 'dotted', icon: '···', dasharray: '3,3', animated: false },
+  { name: 'Solid', style: 'solid', icon: '━', dasharray: null, animated: false },
+];
+
+// ============================================
+// EDGE STYLE CONTEXT MENU
+// ============================================
+
+function EdgeStyleMenu({ x, y, edgeId, currentStyle, onSelectStyle, onClose, theme }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      style={{
+        position: 'fixed',
+        left: x,
+        top: y,
+        background: theme?.modalBg || 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))',
+        border: `1px solid ${theme?.border || 'rgba(255,255,255,0.15)'}`,
+        borderRadius: 12,
+        padding: 12,
+        zIndex: 1000,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        minWidth: 140,
+      }}
+    >
+      <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+        Connection Style
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {EDGE_STYLE_OPTIONS.map((opt) => {
+          const isSelected = currentStyle === opt.style || (!currentStyle && opt.style === 'animated');
+          return (
+            <button
+              key={opt.style}
+              onClick={() => onSelectStyle(edgeId, opt.style)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: isSelected ? `2px solid ${COLORS.purple}` : `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+                background: isSelected ? `${COLORS.purple}20` : 'transparent',
+                cursor: 'pointer',
+                color: theme?.textPrimary || '#fff',
+                fontSize: '0.8rem',
+              }}
+            >
+              <span style={{ fontSize: '1rem', width: 24 }}>{opt.icon}</span>
+              <span>{opt.name}</span>
+              {isSelected && <span style={{ marginLeft: 'auto', color: COLORS.purple }}>✓</span>}
+            </button>
+          );
+        })}
       </div>
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
         <button
@@ -2687,9 +2819,20 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
     if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
       canvas.clearSelection();
       canvas.closeContextMenu();
+      canvas.closeEdgeContextMenu();
       canvas.cancelEdgeEditing();
     }
   }, [canvas]);
+
+  // Helper to get edge style properties
+  const getEdgeStyleProps = useCallback((edgeId) => {
+    const style = canvas.edgeStyles[edgeId] || 'animated';
+    const opt = EDGE_STYLE_OPTIONS.find(o => o.style === style) || EDGE_STYLE_OPTIONS[0];
+    return {
+      strokeDasharray: opt.dasharray,
+      animation: opt.animated ? 'flowDash 1s linear infinite' : 'none',
+    };
+  }, [canvas.edgeStyles]);
 
   // Wrap mouse up to handle connection completion
   const handleMouseUpWithConnection = useCallback((e) => {
@@ -2726,12 +2869,13 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               const path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
               const isEditingThisEdge = canvas.editingEdge === e.id;
               const labelText = isEditingThisEdge ? canvas.edgeEditValue : (e.label || '');
+              const edgeStyleProps = getEdgeStyleProps(e.id);
               return (
                 <g key={e.id}>
                   {/* Invisible wider path for easier clicking */}
-                  <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} />
+                  <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); canvas.handleEdgeContextMenu(ev, e.id); }} />
                   <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite', pointerEvents: 'none' }} />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
                   {/* Edge label or edit input */}
                   {(labelText || isEditingThisEdge) && (
                     <g style={{ cursor: 'pointer' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }}>
@@ -2934,6 +3078,18 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
           nodeId={canvas.contextMenu.nodeId}
           onSelectColor={canvas.setNodeColor}
           onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
+      {/* Edge style menu */}
+      {canvas.edgeContextMenu && (
+        <EdgeStyleMenu
+          x={canvas.edgeContextMenu.x}
+          y={canvas.edgeContextMenu.y}
+          edgeId={canvas.edgeContextMenu.edgeId}
+          currentStyle={canvas.edgeStyles[canvas.edgeContextMenu.edgeId]}
+          onSelectStyle={canvas.setEdgeStyle}
+          onClose={canvas.closeEdgeContextMenu}
           theme={theme}
         />
       )}

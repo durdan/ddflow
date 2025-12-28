@@ -50,7 +50,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 
 ### 2.2 Connection Enhancements
 - [x] **Click to add labels** - Double-click edges to edit ✅
-- [ ] **Connection styles** - Solid, dashed, dotted
+- [x] **Connection styles** - Solid, dashed, dotted, animated (right-click) ✅
 - [ ] **Arrow types** - Different arrowhead styles
 - [ ] **Curved vs straight** - Toggle connection style
 - [ ] **Connection routing** - Smart path finding
@@ -179,7 +179,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 | Phase | Status | Progress |
 |-------|--------|----------|
 | Phase 1: Editor | Complete | 95% |
-| Phase 2: Diagram | In Progress | 60% |
+| Phase 2: Diagram | In Progress | 65% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
 | Phase 5: Collaboration | Planned | 0% |
@@ -199,9 +199,10 @@ Completed:
 5. ~~Group selection~~ ✅ Shift+drag to box-select
 6. ~~Copy/Paste~~ ✅ ⌘C/⌘V to duplicate
 7. ~~Connection labels~~ ✅ Double-click edges to edit
+8. ~~Connection styles~~ ✅ Right-click edges for solid/dashed/dotted
 
 Next priority:
-1. Connection styles - Solid, dashed, dotted options
+1. Snap to grid - Magnetic alignment while dragging
 2. Node resize - Drag handles on nodes
 3. Auto-layout - Automatic arrangement
 
