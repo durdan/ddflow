@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DDFlow User Guide - DSL Syntax Reference</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #0a0a0f, #1a1a2e, #0f0f1a);
+      color: #e0e0e0;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 50px;
+      padding-bottom: 30px;
+      border-bottom: 1px solid rgba(124, 58, 237, 0.3);
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 1.1rem;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 10px 24px;
+      background: linear-gradient(135deg, #7C3AED, #6366F1);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 25px;
+      font-weight: 600;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .back-link:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(124, 58, 237, 0.3);
+    }
+
+    .toc {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 40px;
+    }
+
+    .toc h2 {
+      color: #a78bfa;
+      margin-bottom: 16px;
+      font-size: 1.2rem;
+    }
+
+    .toc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+    }
+
+    .toc a {
+      color: #888;
+      text-decoration: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: all 0.2s;
+      font-size: 0.9rem;
+    }
+
+    .toc a:hover {
+      color: #a78bfa;
+      background: rgba(124, 58, 237, 0.1);
+    }
+
+    .diagram-section {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 30px;
+      margin-bottom: 30px;
+    }
+
+    .diagram-section h2 {
+      color: #fff;
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .diagram-section h2 .emoji {
+      font-size: 1.8rem;
+    }
+
+    .diagram-type {
+      display: inline-block;
+      background: rgba(124, 58, 237, 0.2);
+      color: #a78bfa;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      font-family: monospace;
+    }
+
+    .description {
+      color: #aaa;
+      margin-bottom: 20px;
+    }
+
+    h3 {
+      color: #10B981;
+      font-size: 1rem;
+      margin: 20px 0 10px 0;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .syntax-block, .example-block {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      overflow-x: auto;
+    }
+
+    pre {
+      font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+      font-size: 0.85rem;
+      color: #a78bfa;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .syntax-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+    }
+
+    .syntax-item code {
+      background: rgba(124, 58, 237, 0.2);
+      color: #a78bfa;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: nowrap;
+    }
+
+    .syntax-item span {
+      color: #888;
+    }
+
+    .tip {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 16px;
+      font-size: 0.9rem;
+      color: #10B981;
+    }
+
+    .tip strong {
+      color: #34D399;
+    }
+
+    footer {
+      text-align: center;
+      padding: 40px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      margin-top: 40px;
+      color: #666;
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: #a78bfa;
+      text-decoration: none;
+    }
+
+    @media (max-width: 600px) {
+      .container { padding: 20px 15px; }
+      h1 { font-size: 1.8rem; }
+      .diagram-section { padding: 20px; }
+      .toc-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>DDFlow User Guide</h1>
+      <p class="subtitle">Complete DSL Syntax Reference for All 22 Diagram Types</p>
+      <a href="/" class="back-link">← Back to DDFlow</a>
+    </header>
+
+    <div class="toc">
+      <h2>Quick Navigation</h2>
+      <div class="toc-grid">
+        <a href="#flowchart">Flowchart</a>
+        <a href="#sequence">Sequence Diagram</a>
+        <a href="#mindmap">Mind Map / WBS</a>
+        <a href="#erd">ERD (Database)</a>
+        <a href="#journey">User Journey</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#state">State Machine</a>
+        <a href="#timeline">Timeline</a>
+        <a href="#orgchart">Org Chart</a>
+        <a href="#network">Network Diagram</a>
+        <a href="#gantt">Gantt Chart</a>
+        <a href="#class">Class Diagram</a>
+        <a href="#usecase">Use Case</a>
+        <a href="#pie">Pie Chart</a>
+        <a href="#quadrant">Quadrant</a>
+        <a href="#git">Git Graph</a>
+        <a href="#deployment">Deployment</a>
+        <a href="#wireframe">Wireframe</a>
+        <a href="#activity">Activity</a>
+        <a href="#component">Component</a>
+        <a href="#c4">C4 Diagram</a>
+        <a href="#requirement">Requirement</a>
+      </div>
+    </div>
+
+    <!-- FLOWCHART -->
+    <section id="flowchart" class="diagram-section">
+      <h2><span class="emoji">📊</span> Flowchart</h2>
+      <div class="diagram-type">type: flowchart</div>
+      <p class="description">Create process flows with different node types and connections.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>(start)</code> <span>Start node (rounded)</span></div>
+      <div class="syntax-item"><code>(process)</code> <span>Process/action node</span></div>
+      <div class="syntax-item"><code>(decision)</code> <span>Decision diamond</span></div>
+      <div class="syntax-item"><code>(io)</code> <span>Input/Output node</span></div>
+      <div class="syntax-item"><code>(end)</code> <span>End node (rounded)</span></div>
+      <div class="syntax-item"><code>A -> B</code> <span>Connection between nodes</span></div>
+      <div class="syntax-item"><code>A -> B: label</code> <span>Connection with label</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>(start) Start
+Start -> (process) Validate Input
+Validate Input -> (decision) Is Valid?
+Is Valid? -> (process) Process Data
+Is Valid? -> (io) Show Error
+Process Data -> (end) Done
+Show Error -> (end) Done</pre>
+      </div>
+    </section>
+
+    <!-- SEQUENCE -->
+    <section id="sequence" class="diagram-section">
+      <h2><span class="emoji">🔄</span> Sequence Diagram</h2>
+      <div class="diagram-type">type: sequence</div>
+      <p class="description">Visualize interactions between participants over time.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>participant A, B, C</code> <span>Define participants</span></div>
+      <div class="syntax-item"><code>A -> B: message</code> <span>Solid arrow (request)</span></div>
+      <div class="syntax-item"><code>A --> B: message</code> <span>Dashed arrow (response)</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>participant Client, API, Database, Cache
+
+Client -> API: Login Request
+API -> Cache: Check Session
+Cache --> API: Not Found
+API -> Database: Validate Credentials
+Database --> API: User Data
+API -> Cache: Store Session
+API --> Client: Auth Token</pre>
+      </div>
+    </section>
+
+    <!-- MINDMAP -->
+    <section id="mindmap" class="diagram-section">
+      <h2><span class="emoji">🧠</span> Mind Map / WBS</h2>
+      <div class="diagram-type">type: mindmap | wbs</div>
+      <p class="description">Hierarchical diagrams using indentation. Great for brainstorming and work breakdown structures.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>Root Topic</code> <span>Top-level node</span></div>
+      <div class="syntax-item"><code>  Child</code> <span>2-space indent = child node</span></div>
+      <div class="syntax-item"><code>    Grandchild</code> <span>4-space indent = grandchild</span></div>
+      <div class="syntax-item"><code>- Item</code> <span>Optional bullet prefix</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>Project Launch
+  Planning
+    Define Scope
+    Set Timeline
+    Assign Resources
+  Development
+    Frontend
+      React Components
+      Styling
+    Backend
+      API Design
+      Database
+  Testing
+    Unit Tests
+    Integration Tests
+  Deployment
+    Staging
+    Production</pre>
+      </div>
+    </section>
+
+    <!-- ERD -->
+    <section id="erd" class="diagram-section">
+      <h2><span class="emoji">🗄️</span> ERD (Entity Relationship Diagram)</h2>
+      <div class="diagram-type">type: erd</div>
+      <p class="description">Database schema visualization using SQL CREATE TABLE syntax.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>CREATE TABLE name (...)</code> <span>Define a table</span></div>
+      <div class="syntax-item"><code>PRIMARY KEY</code> <span>Mark primary key field</span></div>
+      <div class="syntax-item"><code>REFERENCES table(col)</code> <span>Foreign key relationship</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>CREATE TABLE users (
+  id UUID PRIMARY KEY,
+  email VARCHAR(255),
+  name VARCHAR(100),
+  created_at TIMESTAMP
+);
+
+CREATE TABLE orders (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users(id),
+  total DECIMAL(10,2),
+  status VARCHAR(50),
+  created_at TIMESTAMP
+);
+
+CREATE TABLE order_items (
+  id UUID PRIMARY KEY,
+  order_id UUID REFERENCES orders(id),
+  product_name VARCHAR(200),
+  quantity INT,
+  price DECIMAL(10,2)
+);</pre>
+      </div>
+    </section>
+
+    <!-- USER JOURNEY -->
+    <section id="journey" class="diagram-section">
+      <h2><span class="emoji">🚶</span> User Journey</h2>
+      <div class="diagram-type">type: journey</div>
+      <p class="description">Map user flows and experiences through your product.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[actor] Name</code> <span>User/Actor node</span></div>
+      <div class="syntax-item"><code>[page] Name</code> <span>Page/Screen node</span></div>
+      <div class="syntax-item"><code>[action] Name</code> <span>User action node</span></div>
+      <div class="syntax-item"><code>[form] Name</code> <span>Form input node</span></div>
+      <div class="syntax-item"><code>[email] Name</code> <span>Email notification</span></div>
+      <div class="syntax-item"><code>[success] Name</code> <span>Success state</span></div>
+      <div class="syntax-item"><code>[error] Name</code> <span>Error state</span></div>
+      <div class="syntax-item"><code>[decision] Name</code> <span>Decision point</span></div>
+      <div class="syntax-item"><code>A -> B</code> <span>Simple connection</span></div>
+      <div class="syntax-item"><code>A -label-> B</code> <span>Labeled connection</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[actor] New User
+[page] Landing Page
+[action] Click Sign Up
+[form] Registration Form
+[email] Verification Email
+[action] Click Verify Link
+[page] Onboarding
+[success] Dashboard
+
+New User -visits-> Landing Page
+Landing Page -> Click Sign Up
+Click Sign Up -> Registration Form
+Registration Form -submits-> Verification Email
+Verification Email -> Click Verify Link
+Click Verify Link -> Onboarding
+Onboarding -completes-> Dashboard</pre>
+      </div>
+    </section>
+
+    <!-- ARCHITECTURE -->
+    <section id="architecture" class="diagram-section">
+      <h2><span class="emoji">🏗️</span> Architecture Diagram</h2>
+      <div class="diagram-type">type: architecture</div>
+      <p class="description">System architecture with layered components.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[clients] A, B</code> <span>Client layer</span></div>
+      <div class="syntax-item"><code>[gateway] API</code> <span>Gateway layer</span></div>
+      <div class="syntax-item"><code>[services] X, Y</code> <span>Services layer</span></div>
+      <div class="syntax-item"><code>[data] DB, Cache</code> <span>Data layer</span></div>
+      <div class="syntax-item"><code>[queue] MQ</code> <span>Message queue</span></div>
+      <div class="syntax-item"><code>[storage] S3</code> <span>Storage layer</span></div>
+      <div class="syntax-item"><code>A -> B</code> <span>Connection</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[clients] Web App, Mobile App, Admin Portal
+[gateway] API Gateway, Load Balancer
+[services] Auth Service, User Service, Order Service, Payment Service
+[queue] RabbitMQ
+[data] PostgreSQL, Redis, Elasticsearch
+[storage] AWS S3
+
+Web App -> API Gateway
+Mobile App -> API Gateway
+Admin Portal -> API Gateway
+API Gateway -> Auth Service
+API Gateway -> User Service
+API Gateway -> Order Service
+Order Service -> Payment Service
+Order Service -> RabbitMQ
+User Service -> PostgreSQL
+Auth Service -> Redis
+Order Service -> Elasticsearch</pre>
+      </div>
+    </section>
+
+    <!-- STATE MACHINE -->
+    <section id="state" class="diagram-section">
+      <h2><span class="emoji">🔀</span> State Machine</h2>
+      <div class="diagram-type">type: state</div>
+      <p class="description">Finite state machines with transitions and events.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>(initial) State</code> <span>Initial state</span></div>
+      <div class="syntax-item"><code>(final) State</code> <span>Final state</span></div>
+      <div class="syntax-item"><code>State</code> <span>Regular state</span></div>
+      <div class="syntax-item"><code>A -> B: EVENT</code> <span>Transition with event</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>(initial) Idle
+Pending
+Processing
+(final) Completed
+(final) Failed
+
+Idle -> Pending: SUBMIT
+Pending -> Processing: APPROVE
+Pending -> Idle: CANCEL
+Processing -> Completed: SUCCESS
+Processing -> Failed: ERROR
+Failed -> Pending: RETRY</pre>
+      </div>
+    </section>
+
+    <!-- TIMELINE -->
+    <section id="timeline" class="diagram-section">
+      <h2><span class="emoji">📅</span> Timeline</h2>
+      <div class="diagram-type">type: timeline</div>
+      <p class="description">Project timelines and roadmaps with milestones.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[Date] Event</code> <span>Timeline event</span></div>
+      <div class="syntax-item"><code>[Date] Event | Description</code> <span>Event with description</span></div>
+      <div class="syntax-item"><code>[Date] *Milestone</code> <span>Milestone (starred)</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[Jan 2024] *Project Kickoff | Team assembled and goals defined
+[Feb 2024] Research Phase | Market analysis and user interviews
+[Mar 2024] Design Sprint | UI/UX prototypes created
+[Apr 2024] *MVP Development | Core features implemented
+[May 2024] Alpha Testing | Internal testing and bug fixes
+[Jun 2024] *Beta Launch | Limited public release
+[Jul 2024] Feedback Integration | User feedback implemented
+[Aug 2024] *Public Launch | Version 1.0 released</pre>
+      </div>
+    </section>
+
+    <!-- ORG CHART -->
+    <section id="orgchart" class="diagram-section">
+      <h2><span class="emoji">👥</span> Organization Chart</h2>
+      <div class="diagram-type">type: orgchart</div>
+      <p class="description">Hierarchical organization structures.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>Name</code> <span>Person/role name</span></div>
+      <div class="syntax-item"><code>Name [Title]</code> <span>Name with title</span></div>
+      <div class="syntax-item"><code>  Subordinate</code> <span>Indented = reports to parent</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>Sarah Chen [CEO]
+  Michael Roberts [CTO]
+    Emily Watson [Engineering Lead]
+      James Miller
+      Lisa Park
+      David Kim
+    Alex Thompson [QA Lead]
+      Rachel Green
+  Jennifer Lee [CFO]
+    Robert Brown [Finance Manager]
+      Amanda White
+  Mark Wilson [CMO]
+    Chris Taylor [Marketing Lead]</pre>
+      </div>
+    </section>
+
+    <!-- NETWORK -->
+    <section id="network" class="diagram-section">
+      <h2><span class="emoji">🌐</span> Network Diagram</h2>
+      <div class="diagram-type">type: network</div>
+      <p class="description">Network topology with devices and connections.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[cloud] Name</code> <span>Cloud/Internet</span></div>
+      <div class="syntax-item"><code>[firewall] Name (IP)</code> <span>Firewall with IP</span></div>
+      <div class="syntax-item"><code>[router] Name (IP)</code> <span>Router</span></div>
+      <div class="syntax-item"><code>[switch] Name</code> <span>Network switch</span></div>
+      <div class="syntax-item"><code>[server] Name (IP)</code> <span>Server</span></div>
+      <div class="syntax-item"><code>[computer] Name</code> <span>Workstation</span></div>
+      <div class="syntax-item"><code>A -- B</code> <span>Connection</span></div>
+      <div class="syntax-item"><code>A -- B: Protocol</code> <span>Connection with protocol</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[cloud] Internet
+[firewall] Edge Firewall (10.0.0.1)
+[router] Core Router (10.0.0.2)
+[switch] Main Switch (10.0.0.3)
+[server] Web Server (10.0.1.10)
+[server] App Server (10.0.1.11)
+[server] Database Server (10.0.1.12)
+[computer] Admin Workstation
+
+Internet -- Edge Firewall
+Edge Firewall -- Core Router
+Core Router -- Main Switch
+Main Switch -- Web Server: HTTP/HTTPS
+Main Switch -- App Server: TCP
+Main Switch -- Database Server: PostgreSQL
+Main Switch -- Admin Workstation</pre>
+      </div>
+    </section>
+
+    <!-- GANTT -->
+    <section id="gantt" class="diagram-section">
+      <h2><span class="emoji">📈</span> Gantt Chart</h2>
+      <div class="diagram-type">type: gantt</div>
+      <p class="description">Project scheduling and task management.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>Task, start, duration</code> <span>Basic task</span></div>
+      <div class="syntax-item"><code>Task, start, duration, progress</code> <span>Task with progress %</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>Requirements Analysis, 0, 2, 100
+System Design, 2, 3, 100
+Database Design, 3, 2, 100
+Frontend Development, 5, 5, 75
+Backend Development, 5, 6, 60
+API Integration, 8, 3, 30
+Testing, 11, 3, 0
+Documentation, 12, 2, 0
+Deployment, 14, 1, 0</pre>
+      </div>
+
+      <div class="tip">
+        <strong>Tip:</strong> Start is the day number, duration is in days, progress is 0-100%.
+      </div>
+    </section>
+
+    <!-- CLASS DIAGRAM -->
+    <section id="class" class="diagram-section">
+      <h2><span class="emoji">📦</span> Class Diagram</h2>
+      <div class="diagram-type">type: class</div>
+      <p class="description">Object-oriented class structures with properties and methods.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>class ClassName</code> <span>Class declaration</span></div>
+      <div class="syntax-item"><code>+ property: type</code> <span>Public property</span></div>
+      <div class="syntax-item"><code>- property: type</code> <span>Private property</span></div>
+      <div class="syntax-item"><code># property: type</code> <span>Protected property</span></div>
+      <div class="syntax-item"><code>+ method(params): return</code> <span>Public method</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>class User
+  + id: string
+  + email: string
+  + name: string
+  - passwordHash: string
+  + login(email, password): boolean
+  + logout(): void
+  # validatePassword(plain): boolean
+
+class Order
+  + id: string
+  + userId: string
+  + items: OrderItem[]
+  + status: OrderStatus
+  + total: number
+  + addItem(item): void
+  + removeItem(itemId): void
+  + calculateTotal(): number
+
+class OrderItem
+  + id: string
+  + productId: string
+  + quantity: number
+  + price: number</pre>
+      </div>
+    </section>
+
+    <!-- USE CASE -->
+    <section id="usecase" class="diagram-section">
+      <h2><span class="emoji">👤</span> Use Case Diagram</h2>
+      <div class="diagram-type">type: usecase</div>
+      <p class="description">System use cases and actor relationships.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>actor Name</code> <span>Define an actor</span></div>
+      <div class="syntax-item"><code>(Use Case Name)</code> <span>Define a use case</span></div>
+      <div class="syntax-item"><code>Actor -> UseCase</code> <span>Actor uses feature</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>actor Customer
+actor Admin
+actor System
+
+(Browse Products)
+(Search Products)
+(Add to Cart)
+(Checkout)
+(Manage Orders)
+(Manage Inventory)
+(Generate Reports)
+(Send Notifications)
+
+Customer -> Browse Products
+Customer -> Search Products
+Customer -> Add to Cart
+Customer -> Checkout
+Admin -> Manage Orders
+Admin -> Manage Inventory
+Admin -> Generate Reports
+System -> Send Notifications</pre>
+      </div>
+    </section>
+
+    <!-- PIE CHART -->
+    <section id="pie" class="diagram-section">
+      <h2><span class="emoji">🥧</span> Pie Chart</h2>
+      <div class="diagram-type">type: pie</div>
+      <p class="description">Data distribution visualization.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>"Label": value</code> <span>Segment with quoted label</span></div>
+      <div class="syntax-item"><code>Label: value</code> <span>Segment with plain label</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>"JavaScript": 35
+"Python": 25
+"TypeScript": 18
+"Java": 12
+"Go": 6
+"Rust": 4</pre>
+      </div>
+    </section>
+
+    <!-- QUADRANT -->
+    <section id="quadrant" class="diagram-section">
+      <h2><span class="emoji">📐</span> Quadrant Diagram</h2>
+      <div class="diagram-type">type: quadrant</div>
+      <p class="description">2x2 matrix for prioritization and analysis.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>title: Title</code> <span>Chart title</span></div>
+      <div class="syntax-item"><code>x-axis: Label</code> <span>X-axis label</span></div>
+      <div class="syntax-item"><code>y-axis: Label</code> <span>Y-axis label</span></div>
+      <div class="syntax-item"><code>quadrant-1: Label</code> <span>Top-right quadrant</span></div>
+      <div class="syntax-item"><code>quadrant-2: Label</code> <span>Top-left quadrant</span></div>
+      <div class="syntax-item"><code>quadrant-3: Label</code> <span>Bottom-left quadrant</span></div>
+      <div class="syntax-item"><code>quadrant-4: Label</code> <span>Bottom-right quadrant</span></div>
+      <div class="syntax-item"><code>Point: [x, y]</code> <span>Data point (0-100)</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>title: Feature Priority Matrix
+x-axis: Implementation Effort →
+y-axis: Business Impact →
+quadrant-1: Quick Wins
+quadrant-2: Major Projects
+quadrant-3: Fill-ins
+quadrant-4: Time Sinks
+
+Dark Mode: [20, 85]
+API Redesign: [75, 90]
+Bug Fixes: [15, 60]
+New Dashboard: [80, 75]
+Documentation: [25, 40]
+Legacy Cleanup: [70, 25]
+Minor UI Tweaks: [10, 20]</pre>
+      </div>
+    </section>
+
+    <!-- GIT GRAPH -->
+    <section id="git" class="diagram-section">
+      <h2><span class="emoji">🌿</span> Git Graph</h2>
+      <div class="diagram-type">type: git</div>
+      <p class="description">Git branch and commit visualization.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>commit "Message"</code> <span>Create a commit</span></div>
+      <div class="syntax-item"><code>branch name</code> <span>Create and switch to branch</span></div>
+      <div class="syntax-item"><code>checkout name</code> <span>Switch to branch</span></div>
+      <div class="syntax-item"><code>merge name</code> <span>Merge branch</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>commit "Initial commit"
+commit "Add project structure"
+commit "Setup build tools"
+branch feature/auth
+commit "Add login page"
+commit "Add authentication logic"
+commit "Add password reset"
+checkout main
+commit "Update README"
+branch feature/dashboard
+commit "Create dashboard layout"
+commit "Add charts component"
+checkout main
+merge feature/auth
+commit "Release v1.0"
+merge feature/dashboard
+commit "Release v1.1"</pre>
+      </div>
+    </section>
+
+    <!-- DEPLOYMENT -->
+    <section id="deployment" class="diagram-section">
+      <h2><span class="emoji">🚀</span> Deployment Diagram</h2>
+      <div class="diagram-type">type: deployment</div>
+      <p class="description">Infrastructure and deployment topology.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[cloud] Name</code> <span>Cloud provider</span></div>
+      <div class="syntax-item"><code>[cluster] Name</code> <span>Cluster/region</span></div>
+      <div class="syntax-item"><code>[container] Name</code> <span>Container/pod</span></div>
+      <div class="syntax-item"><code>[database] Name</code> <span>Database instance</span></div>
+      <div class="syntax-item"><code>[device] Name</code> <span>Client device</span></div>
+      <div class="syntax-item"><code>  Indented</code> <span>Nested inside parent</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[cloud] AWS
+  [cluster] EKS Production
+    [container] API Gateway
+    [container] Auth Service
+    [container] User Service
+    [container] Order Service
+  [cluster] EKS Workers
+    [container] Background Jobs
+    [container] Email Worker
+  [database] RDS PostgreSQL
+  [database] ElastiCache Redis
+  [storage] S3 Bucket
+[cloud] Cloudflare
+  [service] CDN
+  [service] DNS
+[device] Web Browser
+[device] Mobile App</pre>
+      </div>
+    </section>
+
+    <!-- WIREFRAME -->
+    <section id="wireframe" class="diagram-section">
+      <h2><span class="emoji">🖼️</span> Wireframe</h2>
+      <div class="diagram-type">type: wireframe</div>
+      <p class="description">UI mockups and wireframes with rich element syntax.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>{Title}</code> <span>Window/frame title</span></div>
+      <div class="syntax-item"><code>[[ A | B | C ]]</code> <span>Navigation bar</span></div>
+      <div class="syntax-item"><code>(( Tab1 | Tab2 ))</code> <span>Tab bar</span></div>
+      <div class="syntax-item"><code>>> Bread > Crumb</code> <span>Breadcrumbs</span></div>
+      <div class="syntax-item"><code># Heading</code> <span>Heading text</span></div>
+      <div class="syntax-item"><code>[Button]</code> <span>Button</span></div>
+      <div class="syntax-item"><code>[search: placeholder]</code> <span>Search input</span></div>
+      <div class="syntax-item"><code>[v Dropdown]</code> <span>Dropdown select</span></div>
+      <div class="syntax-item"><code>&lt;Card&gt; ... &lt;/Card&gt;</code> <span>Card container</span></div>
+      <div class="syntax-item"><code>(@Username)</code> <span>Avatar</span></div>
+      <div class="syntax-item"><code>|Col1|Col2|Col3|</code> <span>Table row</span></div>
+      <div class="syntax-item"><code>[progress: 75%]</code> <span>Progress bar</span></div>
+      <div class="syntax-item"><code>[slider: 50%]</code> <span>Slider</span></div>
+      <div class="syntax-item"><code>---</code> <span>Divider</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>{E-Commerce Dashboard}
+[[ Home | Products | Orders | Customers | Settings ]]
+
+>> Dashboard > Analytics
+
+# Sales Overview
+
+<Summary Cards>
+(@Admin)
+[search: Search orders...]
+[v This Month]
+
+|Metric|Value|Change|
+|Total Sales|$45,230|+12%|
+|Orders|1,234|+8%|
+|Customers|567|+15%|
+
+[progress: 78%]
+
+---
+
+(( Revenue | Products | Traffic ))
+
+**Recent Orders**
+|Order ID|Customer|Status|Amount|
+|#1234|John Doe|Shipped|$120|
+|#1235|Jane Smith|Processing|$85|
+|#1236|Bob Wilson|Pending|$200|
+
+[Export CSV] [View All Orders]
+</Summary Cards></pre>
+      </div>
+    </section>
+
+    <!-- ACTIVITY -->
+    <section id="activity" class="diagram-section">
+      <h2><span class="emoji">▶️</span> Activity Diagram</h2>
+      <div class="diagram-type">type: activity</div>
+      <p class="description">Activity flows and process workflows.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[start]</code> <span>Start node</span></div>
+      <div class="syntax-item"><code>[end]</code> <span>End node</span></div>
+      <div class="syntax-item"><code>:Action;</code> <span>Action/activity</span></div>
+      <div class="syntax-item"><code>&lt;Decision?&gt;</code> <span>Decision diamond</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[start]
+:Receive Order;
+:Validate Payment;
+<Payment Valid?>
+:Reserve Inventory;
+:Process Shipment;
+:Send Confirmation;
+[end]</pre>
+      </div>
+    </section>
+
+    <!-- COMPONENT -->
+    <section id="component" class="diagram-section">
+      <h2><span class="emoji">🧩</span> Component Diagram</h2>
+      <div class="diagram-type">type: component</div>
+      <p class="description">Software component relationships.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[service] Name</code> <span>Service component</span></div>
+      <div class="syntax-item"><code>[database] Name</code> <span>Database component</span></div>
+      <div class="syntax-item"><code>[cache] Name</code> <span>Cache component</span></div>
+      <div class="syntax-item"><code>[queue] Name</code> <span>Message queue</span></div>
+      <div class="syntax-item"><code>A --> B</code> <span>Dependency arrow</span></div>
+      <div class="syntax-item"><code>A -- B</code> <span>Association</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[service] API Gateway
+[service] User Service
+[service] Order Service
+[service] Payment Service
+[service] Notification Service
+[database] PostgreSQL
+[cache] Redis
+[queue] RabbitMQ
+
+API Gateway --> User Service
+API Gateway --> Order Service
+Order Service --> Payment Service
+Order Service --> RabbitMQ
+RabbitMQ --> Notification Service
+User Service --> PostgreSQL
+Order Service --> PostgreSQL
+User Service -- Redis
+Payment Service -- Redis</pre>
+      </div>
+    </section>
+
+    <!-- C4 -->
+    <section id="c4" class="diagram-section">
+      <h2><span class="emoji">🏛️</span> C4 Diagram</h2>
+      <div class="diagram-type">type: c4</div>
+      <p class="description">C4 model for software architecture visualization.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-item"><code>[person] Name: Desc</code> <span>Person/user</span></div>
+      <div class="syntax-item"><code>[system] Name: Desc</code> <span>Software system</span></div>
+      <div class="syntax-item"><code>[container] Name: Desc</code> <span>Container</span></div>
+      <div class="syntax-item"><code>[component] Name: Desc</code> <span>Component</span></div>
+      <div class="syntax-item"><code>[external] Name: Desc</code> <span>External system</span></div>
+      <div class="syntax-item"><code>A -> B: Action</code> <span>Relationship</span></div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>[person] Customer: A user of the platform
+[person] Admin: System administrator
+
+[system] Web Application: Main customer-facing app
+[container] React Frontend: Single-page application
+[container] Node.js API: RESTful backend service
+[container] PostgreSQL: Primary database
+
+[external] Stripe: Payment processing
+[external] SendGrid: Email delivery
+[external] AWS S3: File storage
+
+Customer -> Web Application: Uses
+Admin -> Web Application: Manages
+Web Application -> React Frontend: Serves
+React Frontend -> Node.js API: API calls
+Node.js API -> PostgreSQL: Reads/Writes
+Node.js API -> Stripe: Processes payments
+Node.js API -> SendGrid: Sends emails
+Node.js API -> AWS S3: Stores files</pre>
+      </div>
+    </section>
+
+    <!-- REQUIREMENT -->
+    <section id="requirement" class="diagram-section">
+      <h2><span class="emoji">📋</span> Requirement Diagram</h2>
+      <div class="diagram-type">type: requirement</div>
+      <p class="description">System requirements documentation.</p>
+
+      <h3>Syntax</h3>
+      <div class="syntax-block">
+<pre>requirement Name {
+  text: Description
+  risk: Low | Medium | High
+  priority: Low | Medium | High | Critical
+}</pre>
+      </div>
+
+      <h3>Example</h3>
+      <div class="example-block">
+<pre>requirement User Authentication {
+  text: Users must authenticate using email and password
+  risk: High
+  priority: Critical
+}
+
+requirement Password Security {
+  text: Passwords must be hashed using bcrypt with salt
+  risk: High
+  priority: Critical
+}
+
+requirement Session Management {
+  text: Sessions expire after 24 hours of inactivity
+  risk: Medium
+  priority: High
+}
+
+requirement Data Encryption {
+  text: All sensitive data must be encrypted at rest
+  risk: High
+  priority: High
+}
+
+requirement Audit Logging {
+  text: All user actions must be logged for audit
+  risk: Low
+  priority: Medium
+}</pre>
+      </div>
+    </section>
+
+    <footer>
+      <p>DDFlow Diagram Engine &copy; 2024</p>
+      <p>Created by <a href="mailto:durgesh_d@hotmail.com">Durgesh Dandotiya</a></p>
+    </footer>
+  </div>
+</body>
+</html>

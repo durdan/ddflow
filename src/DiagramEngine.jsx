@@ -2667,6 +2667,9 @@ export default function Demo() {
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
+          <a href="/guide.html" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 12px', background: 'rgba(16,185,129,0.2)', border: 'none', borderRadius: 20, color: '#10B981', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, textDecoration: 'none' }}>
+            📖 Guide
+          </a>
           <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 12px', background: showAIChat ? 'linear-gradient(135deg, #7C3AED, #6366F1)' : 'rgba(124,58,237,0.2)', border: 'none', borderRadius: 20, color: '#fff', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
             🤖 AI Chat
           </button>
