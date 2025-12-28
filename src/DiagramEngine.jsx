@@ -126,6 +126,12 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const [editingEdge, setEditingEdge] = useState(null);
   const [edgeEditValue, setEdgeEditValue] = useState('');
 
+  // Connection drawing state (drag from node to node)
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionStart, setConnectionStart] = useState(null); // { nodeId, x, y }
+  const [connectionEnd, setConnectionEnd] = useState(null); // { x, y } - mouse position
+  const [connectionTarget, setConnectionTarget] = useState(null); // nodeId being hovered
+
   // Touch state for pinch-to-zoom
   const lastTouchDistance = useRef(null);
   const lastTouchCenter = useRef(null);
@@ -286,6 +292,35 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setEdgeEditValue('');
   }, []);
 
+  // Start drawing a connection from a node's port
+  const handlePortMouseDown = useCallback((e, nodeId, portX, portY) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsConnecting(true);
+    setConnectionStart({ nodeId, x: portX, y: portY });
+    setConnectionEnd({ x: portX, y: portY });
+  }, []);
+
+  // Cancel connection drawing
+  const cancelConnection = useCallback(() => {
+    setIsConnecting(false);
+    setConnectionStart(null);
+    setConnectionEnd(null);
+    setConnectionTarget(null);
+  }, []);
+
+  // Set the target node when hovering during connection
+  const setConnectionTargetNode = useCallback((nodeId) => {
+    if (isConnecting && connectionStart && connectionStart.nodeId !== nodeId) {
+      setConnectionTarget(nodeId);
+    }
+  }, [isConnecting, connectionStart]);
+
+  // Clear target when leaving node
+  const clearConnectionTarget = useCallback(() => {
+    setConnectionTarget(null);
+  }, []);
+
   // Get nodes within selection box
   const getNodesInSelectionBox = useCallback((nodes, box) => {
     if (!box || !nodes) return [];
@@ -303,6 +338,9 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   const handleMouseMove = useCallback((e) => {
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+    } else if (isConnecting) {
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      setConnectionEnd({ x: point.x, y: point.y });
     } else if (isSelecting && selectionBox) {
       const point = getCanvasPoint(e.clientX, e.clientY);
       setSelectionBox(prev => ({ ...prev, endX: point.x, endY: point.y }));
@@ -313,14 +351,30 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
         [dragging]: { x: point.x - dragOffset.x, y: point.y - dragOffset.y }
       }));
     }
-  }, [isPanning, panStart, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint]);
+  }, [isPanning, panStart, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint]);
 
+  // Complete connection on mouse up - returns connection info if valid
   const handleMouseUp = useCallback(() => {
+    // Check if we completed a valid connection
+    let completedConnection = null;
+    if (isConnecting && connectionStart && connectionTarget) {
+      completedConnection = {
+        source: connectionStart.nodeId,
+        target: connectionTarget
+      };
+    }
+
     setIsPanning(false);
     setDragging(null);
     setIsSelecting(false);
     setSelectionBox(null);
-  }, []);
+    setIsConnecting(false);
+    setConnectionStart(null);
+    setConnectionEnd(null);
+    setConnectionTarget(null);
+
+    return completedConnection;
+  }, [isConnecting, connectionStart, connectionTarget]);
 
   // Touch handlers
   const getTouchDistance = (touches) => {
@@ -486,6 +540,15 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     handleEdgeDoubleClick,
     finishEdgeEditing,
     cancelEdgeEditing,
+    // Connection drawing (drag from node to node)
+    isConnecting,
+    connectionStart,
+    connectionEnd,
+    connectionTarget,
+    handlePortMouseDown,
+    cancelConnection,
+    setConnectionTargetNode,
+    clearConnectionTarget,
     // Existing handlers
     handleCanvasMouseDown,
     handleNodeMouseDown,
@@ -517,7 +580,7 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom }) {
       </div>
       <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: '0.7rem', zIndex: 100 }}>{Math.round(zoom * 100)}%</div>
       <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', borderRadius: 6, padding: '6px 10px', color: '#666', fontSize: '0.65rem', zIndex: 100 }}>
-        Drag nodes • Double-click to edit • Shift+drag to box-select • ⌘C/⌘V copy/paste
+        Drag nodes • Drag port to connect • Double-click to edit • Shift+drag to select • ⌘C/⌘V copy/paste
       </div>
     </>
   );
@@ -2539,7 +2602,7 @@ function JourneySectionDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Flow Diagram with draggable nodes
-function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange }) {
+function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, io: { color: COLORS.purple, icon: '📦' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
@@ -2628,10 +2691,23 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
     }
   }, [canvas]);
 
+  // Wrap mouse up to handle connection completion
+  const handleMouseUpWithConnection = useCallback((e) => {
+    const connection = canvas.handleMouseUp();
+    if (connection && onCreateConnection) {
+      onCreateConnection(connection.source, connection.target);
+    }
+  }, [canvas, onCreateConnection]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
-      <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <style>{`
+        @keyframes flowDash { to { stroke-dashoffset: -20; } }
+        .flow-node:hover .connection-port-right { opacity: 1 !important; transform: translateY(-50%) scale(1.1) !important; }
+        .flow-node:hover .connection-port-left { opacity: 0.3 !important; }
+        .edge-add-label:hover { opacity: 1 !important; }
+      `}</style>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={handleMouseUpWithConnection} onMouseLeave={handleMouseUpWithConnection} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : canvas.isConnecting ? 'crosshair' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible' }}>
           <defs><marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
@@ -2687,6 +2763,29 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                 style={{ pointerEvents: 'none' }}
               />
             )}
+            {/* Connection preview line while drawing */}
+            {canvas.isConnecting && canvas.connectionStart && canvas.connectionEnd && (
+              <g style={{ pointerEvents: 'none' }}>
+                <line
+                  x1={canvas.connectionStart.x}
+                  y1={canvas.connectionStart.y}
+                  x2={canvas.connectionEnd.x}
+                  y2={canvas.connectionEnd.y}
+                  stroke={canvas.connectionTarget ? COLORS.green : COLORS.purple}
+                  strokeWidth={3}
+                  strokeDasharray="8,4"
+                  opacity={0.8}
+                />
+                {/* Target indicator circle */}
+                <circle
+                  cx={canvas.connectionEnd.x}
+                  cy={canvas.connectionEnd.y}
+                  r={8}
+                  fill={canvas.connectionTarget ? COLORS.green : COLORS.purple}
+                  opacity={0.6}
+                />
+              </g>
+            )}
           </g>
         </svg>
         {/* Edge label edit input (positioned in screen space) */}
@@ -2735,14 +2834,27 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
             };
             if (isDiamond) { style.width = 70; style.height = 70; style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
+            const isConnectionTarget = canvas.isConnecting && canvas.connectionTarget === node.id;
+            const canBeTarget = canvas.isConnecting && canvas.connectionStart?.nodeId !== node.id;
+            // Calculate port positions (right side for outgoing, left for incoming)
+            const portRightX = isDiamond ? 35 : 65;
+            const portLeftX = isDiamond ? -35 : -65;
             return (
               <div
                 key={node.id}
+                className="flow-node"
                 onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
                 onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)}
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
                 onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)}
-                style={style}
+                onMouseEnter={() => canBeTarget && canvas.setConnectionTargetNode(node.id)}
+                onMouseLeave={() => canvas.clearConnectionTarget()}
+                style={{
+                  ...style,
+                  boxShadow: isConnectionTarget
+                    ? `0 0 0 4px ${COLORS.green}, 0 0 30px ${COLORS.green}50`
+                    : style.boxShadow
+                }}
               >
                 <div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center', width: '100%', padding: '0 8px' }}>
                   {s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}
@@ -2755,6 +2867,47 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                     style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}
                   />
                 </div>
+                {/* Right port - for starting connections (outgoing) */}
+                <div
+                  className="connection-port connection-port-right"
+                  onMouseDown={(e) => canvas.handlePortMouseDown(e, node.id, pos.x + portRightX, pos.y)}
+                  style={{
+                    position: 'absolute',
+                    right: isDiamond ? -8 : -8,
+                    top: '50%',
+                    transform: isDiamond ? 'rotate(-45deg) translateY(-50%)' : 'translateY(-50%)',
+                    width: 16,
+                    height: 16,
+                    borderRadius: '50%',
+                    background: COLORS.purple,
+                    border: '3px solid rgba(255,255,255,0.9)',
+                    cursor: 'crosshair',
+                    opacity: 0,
+                    transition: 'opacity 0.15s, transform 0.15s',
+                    zIndex: 10
+                  }}
+                  title="Drag to connect"
+                />
+                {/* Left port - for receiving connections (incoming) */}
+                <div
+                  className="connection-port connection-port-left"
+                  style={{
+                    position: 'absolute',
+                    left: isDiamond ? -8 : -8,
+                    top: '50%',
+                    transform: isDiamond ? 'rotate(-45deg) translateY(-50%)' : 'translateY(-50%)',
+                    width: 16,
+                    height: 16,
+                    borderRadius: '50%',
+                    background: canBeTarget ? COLORS.green : COLORS.blue,
+                    border: '3px solid rgba(255,255,255,0.9)',
+                    cursor: 'pointer',
+                    opacity: canBeTarget ? 1 : 0,
+                    transition: 'opacity 0.15s, transform 0.15s',
+                    zIndex: 10,
+                    pointerEvents: canBeTarget ? 'auto' : 'none'
+                  }}
+                />
               </div>
             );
           })}
@@ -4225,7 +4378,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
 // MAIN COMPONENT
 // ============================================
 
-export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange }) {
+export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
   const t = THEMES[theme] || THEMES.dark;
   const parsed = useMemo(() => {
     if (data) return data;
@@ -4264,9 +4417,9 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelCh
     case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} />;
     case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} />;
     case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} />;
-    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
-    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
-    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} />;
+    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
+    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
+    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'journey': return <UserJourneyDiagram data={parsed} theme={t} />;
     case 'timeline': return <TimelineDiagram events={parsed} theme={t} />;
     case 'sequence': return <SequenceDiagram data={parsed} theme={t} />;
@@ -4989,6 +5142,17 @@ export default function Demo() {
     }
   }, [src, active, diagramName, pushState]);
 
+  // Handle creating a new connection between nodes (drag from port to port)
+  const handleCreateConnection = useCallback((sourceNodeId, targetNodeId) => {
+    if (!sourceNodeId || !targetNodeId) return;
+    // Add a new connection line to the DSL
+    // Format: sourceId -> targetId
+    const newLine = `${sourceNodeId} -> ${targetNodeId}`;
+    const newSource = src + '\n' + newLine;
+    setSource(newSource);
+    pushState({ type: active, source: newSource, diagramName }, 'create-connection');
+  }, [src, active, diagramName, pushState]);
+
   // Sync history state back to component state when undo/redo
   useEffect(() => {
     if (isApplying()) {
@@ -5263,7 +5427,7 @@ export default function Demo() {
           </div>
         )}
         <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
-          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} />
+          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} />
         </div>
       </div>
 
