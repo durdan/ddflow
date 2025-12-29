@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import AIChatPanel from './components/AIChatPanel.jsx';
+import TemplateGallery from './components/TemplateGallery.jsx';
+import SaveTemplateModal from './components/SaveTemplateModal.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
@@ -7004,6 +7006,8 @@ export default function Demo() {
   const [showRecentFiles, setShowRecentFiles] = useState(false);
   const [showMermaidImport, setShowMermaidImport] = useState(false);
   const [showMermaidExport, setShowMermaidExport] = useState(false);
+  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
@@ -7416,6 +7420,8 @@ export default function Demo() {
           <button onClick={handleSave} style={{ padding: '4px 8px', background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, color: COLORS.green, fontSize: '0.65rem', cursor: 'pointer' }} title="Save to browser storage">💾 Save</button>
           <button onClick={handleExportFile} style={{ padding: '4px 8px', background: 'rgba(59,130,246,0.2)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, color: '#3B82F6', fontSize: '0.65rem', cursor: 'pointer' }} title="Export as .ddflow file">📥 Export</button>
           <button onClick={() => setShowRecentFiles(true)} style={{ padding: '4px 8px', background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 6, color: '#a78bfa', fontSize: '0.65rem', cursor: 'pointer' }} title="Open recent diagrams">📂 Open</button>
+          <button onClick={() => setShowTemplateGallery(true)} style={{ padding: '4px 8px', background: 'rgba(236,72,153,0.2)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, color: COLORS.pink, fontSize: '0.65rem', cursor: 'pointer' }} title="Browse template gallery">📋 Templates</button>
+          <button onClick={() => setShowSaveTemplate(true)} style={{ padding: '4px 8px', background: 'rgba(245,158,11,0.2)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, color: COLORS.orange, fontSize: '0.65rem', cursor: 'pointer' }} title="Save current diagram as template">⭐ Save Template</button>
           <button onClick={handleToggleAutoSave} style={{ padding: '4px 8px', background: autoSaveEnabled ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', border: `1px solid ${autoSaveEnabled ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: autoSaveEnabled ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }} title={autoSaveEnabled ? 'Auto-save is ON' : 'Auto-save is OFF'}>{autoSaveEnabled ? '🔄 Auto' : '⏸️ Auto'}</button>
           <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
           <button onClick={() => setShowMermaidImport(true)} style={{ padding: '4px 8px', background: 'rgba(6,182,212,0.2)', border: '1px solid rgba(6,182,212,0.3)', borderRadius: 6, color: COLORS.cyan, fontSize: '0.65rem', cursor: 'pointer' }} title="Import from Mermaid">🧜‍♀️ Mermaid</button>
@@ -7454,6 +7460,19 @@ export default function Demo() {
         onClose={() => setShowMermaidExport(false)}
         diagramType={active}
         diagramSource={src}
+      />
+      <TemplateGallery
+        isOpen={showTemplateGallery}
+        onClose={() => setShowTemplateGallery(false)}
+        onApplyTemplate={handleApplyDiagram}
+        theme={theme}
+      />
+      <SaveTemplateModal
+        isOpen={showSaveTemplate}
+        onClose={() => setShowSaveTemplate(false)}
+        diagramType={active}
+        diagramSource={src}
+        theme={theme}
       />
     </div>
   );

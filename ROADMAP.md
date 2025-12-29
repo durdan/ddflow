@@ -92,10 +92,10 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 ## Phase 4: Templates & Library
 
 ### 4.1 Template System
-- [ ] **Preset templates** - Common diagram patterns
-- [ ] **Save as template** - Create custom templates
-- [ ] **Template categories** - Organized by type
-- [ ] **Quick start gallery** - Visual template browser
+- [x] **Preset templates** - Common diagram patterns (30+ templates) ✅
+- [x] **Save as template** - Create custom templates ✅
+- [x] **Template categories** - Organized by type (8 categories) ✅
+- [x] **Quick start gallery** - Visual template browser ✅
 
 ### 4.2 Node Library
 - [ ] **Sidebar library** - Drag-and-drop nodes
@@ -181,7 +181,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 | Phase 1: Editor | Complete | 95% |
 | Phase 2: Diagram | Complete | 100% |
 | Phase 3: AI | Planned | 0% |
-| Phase 4: Templates | Planned | 0% |
+| Phase 4: Templates | In Progress | 25% |
 | Phase 5: Collaboration | Planned | 0% |
 | Phase 6: Integration | In Progress | 20% |
 
