@@ -617,3 +617,239 @@ export function getProviderName() {
   const provider = import.meta.env.VITE_AI_PROVIDER || 'openai';
   return provider === 'anthropic' ? 'Claude' : 'GPT-4';
 }
+
+// ============================================
+// AI ENHANCEMENT FUNCTIONS
+// ============================================
+
+const EXPLAIN_SYSTEM_PROMPT = `You are DDFlow's diagram explainer. You analyze DDFlow DSL diagrams and explain them clearly.
+
+Given a diagram's DSL code and type, explain:
+1. What the diagram represents
+2. The key components and their relationships
+3. The flow or structure
+4. Any patterns or notable aspects
+
+Respond in clear, concise language with proper formatting. Use bullet points where appropriate.
+Keep your explanation focused and helpful for someone trying to understand the diagram.`;
+
+const IMPROVE_SYSTEM_PROMPT = `You are DDFlow's diagram optimizer. You analyze DDFlow DSL diagrams and suggest improvements.
+
+Given a diagram's DSL code and type, suggest improvements for:
+1. Clarity and readability
+2. Missing elements or connections
+3. Better organization or naming
+4. Best practices for this diagram type
+
+IMPORTANT: Your response must follow this exact format:
+1. First, output the improved DSL code starting with <!-- type: typename -->
+2. Then add a line with "---EXPLANATION---"
+3. Then explain your changes
+
+Example format:
+<!-- type: flowchart -->
+(start) Begin
+Begin -> (process) Improved Step
+...
+
+---EXPLANATION---
+Here are the improvements I made:
+- Renamed nodes for clarity
+- Added missing connection
+...`;
+
+const VALIDATE_SYSTEM_PROMPT = `You are DDFlow's diagram validator. You analyze DDFlow DSL diagrams for issues.
+
+Given a diagram's DSL code and type, check for:
+1. Syntax errors
+2. Missing connections (orphaned nodes)
+3. Incomplete definitions
+4. Best practice violations
+5. Logical issues in the flow
+
+Respond with a JSON object in this exact format:
+{
+  "isValid": true/false,
+  "errors": ["list of critical errors"],
+  "warnings": ["list of potential issues"],
+  "suggestions": ["list of improvement suggestions"]
+}
+
+IMPORTANT: Return ONLY the JSON object, no other text.`;
+
+// Generic AI call function that uses either provider
+async function callAI(systemPrompt, userPrompt) {
+  const provider = import.meta.env.VITE_AI_PROVIDER || 'openai';
+
+  if (provider === 'anthropic') {
+    return callAnthropicWithSystem(systemPrompt, userPrompt);
+  } else {
+    return callOpenAIWithSystem(systemPrompt, userPrompt);
+  }
+}
+
+// OpenAI call with custom system prompt
+async function callOpenAIWithSystem(systemPrompt, userPrompt) {
+  const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+  const model = import.meta.env.VITE_AI_MODEL || 'gpt-4o';
+
+  if (!apiKey) {
+    throw new Error('OpenAI API key not configured. Please set VITE_OPENAI_API_KEY in .env');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 2048
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'OpenAI API request failed');
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+// Anthropic call with custom system prompt
+async function callAnthropicWithSystem(systemPrompt, userPrompt) {
+  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+  const model = import.meta.env.VITE_AI_MODEL || 'claude-sonnet-4-20250514';
+
+  if (!apiKey) {
+    throw new Error('Anthropic API key not configured. Please set VITE_ANTHROPIC_API_KEY in .env');
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Anthropic API request failed');
+  }
+
+  const data = await response.json();
+  return data.content[0].text;
+}
+
+// Explain what a diagram represents
+export async function explainDiagram(dsl, diagramType) {
+  const prompt = `Please explain this ${diagramType} diagram:
+
+\`\`\`
+${dsl}
+\`\`\`
+
+Provide a clear explanation of what this diagram represents, its key components, and how they relate to each other.`;
+
+  return await callAI(EXPLAIN_SYSTEM_PROMPT, prompt);
+}
+
+// Suggest improvements for a diagram
+export async function suggestImprovements(dsl, diagramType) {
+  const prompt = `Please analyze this ${diagramType} diagram and suggest improvements:
+
+\`\`\`
+${dsl}
+\`\`\`
+
+Provide an improved version of the DSL code followed by an explanation of your changes.`;
+
+  const response = await callAI(IMPROVE_SYSTEM_PROMPT, prompt);
+
+  // Parse the response to separate DSL from explanation
+  const parts = response.split('---EXPLANATION---');
+
+  if (parts.length === 2) {
+    const improvedDsl = parts[0].trim();
+    const explanation = parts[1].trim();
+    const newType = parseDiagramType(improvedDsl) || diagramType;
+    const cleanDsl = extractDSL(improvedDsl);
+
+    return {
+      dsl: cleanDsl,
+      type: newType,
+      explanation,
+      raw: response
+    };
+  }
+
+  // Fallback: try to extract DSL from the response
+  const typeMatch = response.match(/<!--\s*type:\s*(\w+)\s*-->/);
+  if (typeMatch) {
+    return {
+      dsl: extractDSL(response),
+      type: parseDiagramType(response),
+      explanation: 'Improvements applied.',
+      raw: response
+    };
+  }
+
+  return {
+    dsl: dsl,
+    type: diagramType,
+    explanation: response,
+    raw: response
+  };
+}
+
+// Validate a diagram for errors and issues
+export async function validateDiagram(dsl, diagramType) {
+  const prompt = `Please validate this ${diagramType} diagram for errors and issues:
+
+\`\`\`
+${dsl}
+\`\`\`
+
+Return a JSON object with isValid, errors, warnings, and suggestions arrays.`;
+
+  const response = await callAI(VALIDATE_SYSTEM_PROMPT, prompt);
+
+  try {
+    // Try to parse the JSON response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+
+    // Fallback: return a default valid result
+    return {
+      isValid: true,
+      errors: [],
+      warnings: ['Could not parse validation response'],
+      suggestions: [response]
+    };
+  } catch (e) {
+    return {
+      isValid: true,
+      errors: [],
+      warnings: ['Validation response was not in expected format'],
+      suggestions: [response]
+    };
+  }
+}

@@ -6,6 +6,7 @@ import DropdownMenu from './components/DropdownMenu.jsx';
 import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
 import NodeLibrarySidebar from './components/NodeLibrarySidebar.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
+import { explainDiagram, suggestImprovements, validateDiagram, isAIConfigured } from './services/aiService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
 import { mermaidToDDFlow, ddflowToMermaid, downloadMermaidFile, copyMermaidToClipboard, detectMermaidType } from './services/mermaidService.js';
@@ -7012,6 +7013,8 @@ export default function Demo() {
   const [showTemplateGallery, setShowTemplateGallery] = useState(false);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [showNodeLibrary, setShowNodeLibrary] = useState(false);
+  const [showAIResult, setShowAIResult] = useState(null); // { type: 'explain' | 'improve' | 'validate', content: any, loading: boolean }
+  const [aiLoading, setAiLoading] = useState(false);
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
@@ -7379,6 +7382,70 @@ export default function Demo() {
     setShowEditor(true); // Show editor so user can see the added node
   }, [source, demo.source, handleSourceChange]);
 
+  // AI Enhancement Handlers
+  const handleExplainDiagram = useCallback(async () => {
+    if (!isAIConfigured()) {
+      setExportStatus({ loading: false, message: 'AI not configured. Check .env' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+      return;
+    }
+    setAiLoading(true);
+    setShowAIResult({ type: 'explain', content: null, loading: true });
+    try {
+      const explanation = await explainDiagram(src, active);
+      setShowAIResult({ type: 'explain', content: explanation, loading: false });
+    } catch (error) {
+      setShowAIResult({ type: 'explain', content: `Error: ${error.message}`, loading: false });
+    } finally {
+      setAiLoading(false);
+    }
+  }, [src, active]);
+
+  const handleImproveDiagram = useCallback(async () => {
+    if (!isAIConfigured()) {
+      setExportStatus({ loading: false, message: 'AI not configured. Check .env' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+      return;
+    }
+    setAiLoading(true);
+    setShowAIResult({ type: 'improve', content: null, loading: true });
+    try {
+      const result = await suggestImprovements(src, active);
+      setShowAIResult({ type: 'improve', content: result, loading: false });
+    } catch (error) {
+      setShowAIResult({ type: 'improve', content: { explanation: `Error: ${error.message}` }, loading: false });
+    } finally {
+      setAiLoading(false);
+    }
+  }, [src, active]);
+
+  const handleValidateDiagram = useCallback(async () => {
+    if (!isAIConfigured()) {
+      setExportStatus({ loading: false, message: 'AI not configured. Check .env' });
+      setTimeout(() => setExportStatus({ loading: false, message: '' }), 3000);
+      return;
+    }
+    setAiLoading(true);
+    setShowAIResult({ type: 'validate', content: null, loading: true });
+    try {
+      const result = await validateDiagram(src, active);
+      setShowAIResult({ type: 'validate', content: result, loading: false });
+    } catch (error) {
+      setShowAIResult({ type: 'validate', content: { isValid: false, errors: [error.message], warnings: [], suggestions: [] }, loading: false });
+    } finally {
+      setAiLoading(false);
+    }
+  }, [src, active]);
+
+  const handleApplyImprovement = useCallback(() => {
+    if (showAIResult?.type === 'improve' && showAIResult.content?.dsl) {
+      setActive(showAIResult.content.type);
+      setSource(showAIResult.content.dsl);
+      setShowEditor(true);
+      setShowAIResult(null);
+    }
+  }, [showAIResult]);
+
   // Handle Mermaid import
   const handleMermaidImport = (type, dsl) => {
     setActive(type);
@@ -7477,6 +7544,22 @@ export default function Demo() {
           items={[
             { icon: '🧜‍♀️', label: 'Import Mermaid', description: 'Convert from Mermaid syntax', onClick: () => setShowMermaidImport(true) },
             { icon: '📂', label: 'Open .ddflow File', description: 'Load saved diagram', onClick: () => setShowRecentFiles(true) },
+          ]}
+        />
+
+        {/* AI Tools Menu */}
+        <DropdownMenu
+          label={aiLoading ? 'AI...' : 'AI Tools'}
+          icon="✨"
+          color={COLORS.purple}
+          theme={theme}
+          items={[
+            { type: 'section', label: 'Analysis' },
+            { icon: '📖', label: 'Explain Diagram', description: 'Get AI explanation of diagram', onClick: handleExplainDiagram, disabled: aiLoading },
+            { icon: '✅', label: 'Validate Diagram', description: 'Check for errors and issues', onClick: handleValidateDiagram, disabled: aiLoading },
+            { type: 'divider' },
+            { type: 'section', label: 'Enhancement' },
+            { icon: '💡', label: 'Suggest Improvements', description: 'Get AI optimization tips', onClick: handleImproveDiagram, disabled: aiLoading },
           ]}
         />
 
@@ -7579,6 +7662,201 @@ export default function Demo() {
         diagramSource={src}
         theme={theme}
       />
+
+      {/* AI Result Modal */}
+      {showAIResult && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: 20
+        }} onClick={() => !showAIResult.loading && setShowAIResult(null)}>
+          <div style={{
+            background: theme.modalBg,
+            borderRadius: 16,
+            border: `1px solid ${theme.border}`,
+            width: '100%',
+            maxWidth: 600,
+            maxHeight: '80vh',
+            overflow: 'hidden',
+            boxShadow: '0 25px 50px rgba(0,0,0,0.4)'
+          }} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{
+              padding: '16px 20px',
+              borderBottom: `1px solid ${theme.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: `${COLORS.purple}15`
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '1.2rem' }}>
+                  {showAIResult.type === 'explain' ? '📖' : showAIResult.type === 'validate' ? '✅' : '💡'}
+                </span>
+                <span style={{ fontWeight: 600, color: theme.textPrimary }}>
+                  {showAIResult.type === 'explain' ? 'Diagram Explanation' : showAIResult.type === 'validate' ? 'Validation Results' : 'Improvement Suggestions'}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowAIResult(null)}
+                disabled={showAIResult.loading}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: '1.2rem',
+                  cursor: showAIResult.loading ? 'not-allowed' : 'pointer',
+                  padding: 4
+                }}
+              >✕</button>
+            </div>
+
+            {/* Content */}
+            <div style={{
+              padding: 20,
+              maxHeight: 'calc(80vh - 120px)',
+              overflowY: 'auto'
+            }}>
+              {showAIResult.loading ? (
+                <div style={{ textAlign: 'center', padding: 40, color: theme.textSecondary }}>
+                  <div style={{ fontSize: '2rem', marginBottom: 12 }}>⏳</div>
+                  <div>Analyzing diagram with AI...</div>
+                </div>
+              ) : showAIResult.type === 'explain' ? (
+                <div style={{ color: theme.textPrimary, lineHeight: 1.6, fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>
+                  {showAIResult.content}
+                </div>
+              ) : showAIResult.type === 'validate' ? (
+                <div>
+                  {/* Validation Status */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '12px 16px',
+                    background: showAIResult.content?.isValid ? `${COLORS.green}15` : `${COLORS.red}15`,
+                    borderRadius: 8,
+                    marginBottom: 16
+                  }}>
+                    <span style={{ fontSize: '1.2rem' }}>{showAIResult.content?.isValid ? '✓' : '✗'}</span>
+                    <span style={{ color: showAIResult.content?.isValid ? COLORS.green : COLORS.red, fontWeight: 600 }}>
+                      {showAIResult.content?.isValid ? 'Diagram is valid' : 'Issues found'}
+                    </span>
+                  </div>
+
+                  {/* Errors */}
+                  {showAIResult.content?.errors?.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ color: COLORS.red, fontWeight: 600, marginBottom: 8, fontSize: '0.85rem' }}>Errors:</div>
+                      {showAIResult.content.errors.map((err, i) => (
+                        <div key={i} style={{ padding: '8px 12px', background: `${COLORS.red}10`, borderRadius: 6, marginBottom: 4, color: theme.textPrimary, fontSize: '0.85rem' }}>
+                          {err}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Warnings */}
+                  {showAIResult.content?.warnings?.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ color: COLORS.orange, fontWeight: 600, marginBottom: 8, fontSize: '0.85rem' }}>Warnings:</div>
+                      {showAIResult.content.warnings.map((warn, i) => (
+                        <div key={i} style={{ padding: '8px 12px', background: `${COLORS.orange}10`, borderRadius: 6, marginBottom: 4, color: theme.textPrimary, fontSize: '0.85rem' }}>
+                          {warn}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Suggestions */}
+                  {showAIResult.content?.suggestions?.length > 0 && (
+                    <div>
+                      <div style={{ color: COLORS.blue, fontWeight: 600, marginBottom: 8, fontSize: '0.85rem' }}>Suggestions:</div>
+                      {showAIResult.content.suggestions.map((sug, i) => (
+                        <div key={i} style={{ padding: '8px 12px', background: `${COLORS.blue}10`, borderRadius: 6, marginBottom: 4, color: theme.textPrimary, fontSize: '0.85rem' }}>
+                          {sug}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : showAIResult.type === 'improve' ? (
+                <div>
+                  {/* Explanation */}
+                  <div style={{ color: theme.textPrimary, lineHeight: 1.6, fontSize: '0.9rem', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
+                    {showAIResult.content?.explanation || 'No explanation provided.'}
+                  </div>
+
+                  {/* Improved DSL Preview */}
+                  {showAIResult.content?.dsl && (
+                    <div>
+                      <div style={{ color: COLORS.purple, fontWeight: 600, marginBottom: 8, fontSize: '0.85rem' }}>Improved DSL:</div>
+                      <pre style={{
+                        background: theme.inputBg,
+                        padding: 12,
+                        borderRadius: 8,
+                        fontSize: '0.75rem',
+                        overflow: 'auto',
+                        maxHeight: 200,
+                        color: theme.editorText
+                      }}>{showAIResult.content.dsl}</pre>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            {!showAIResult.loading && (
+              <div style={{
+                padding: '12px 20px',
+                borderTop: `1px solid ${theme.border}`,
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 10
+              }}>
+                {showAIResult.type === 'improve' && showAIResult.content?.dsl && (
+                  <button
+                    onClick={handleApplyImprovement}
+                    style={{
+                      padding: '8px 16px',
+                      background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.indigo})`,
+                      border: 'none',
+                      borderRadius: 6,
+                      color: '#fff',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Apply Improvements
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAIResult(null)}
+                  style={{
+                    padding: '8px 16px',
+                    background: 'rgba(255,255,255,0.1)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: 6,
+                    color: theme.textSecondary,
+                    fontSize: '0.8rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
