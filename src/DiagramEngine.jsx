@@ -2,6 +2,8 @@ import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import AIChatPanel from './components/AIChatPanel.jsx';
 import TemplateGallery from './components/TemplateGallery.jsx';
 import SaveTemplateModal from './components/SaveTemplateModal.jsx';
+import DropdownMenu from './components/DropdownMenu.jsx';
+import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
@@ -7377,58 +7379,123 @@ export default function Demo() {
 
   return (
     <div style={{ minHeight: '100vh', background: theme.background, fontFamily: 'system-ui', color: theme.textPrimary, transition: 'background 0.3s ease, color 0.3s ease' }}>
-      <div style={{ padding: '12px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.headerBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, background: theme.logoGradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>DDFlow Diagram Engine</h1>
-          <p style={{ color: theme.textSecondary, margin: 0, fontSize: '0.75rem' }}>22 types • All nodes draggable • Pan & Zoom • AI Powered</p>
+      {/* Header */}
+      <div style={{ padding: '10px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.headerBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div>
+            <h1 style={{ fontSize: '1.2rem', fontWeight: 800, background: theme.logoGradient, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.4rem' }}>◈</span> DDFlow
+            </h1>
+          </div>
+          <div style={{ height: 24, width: 1, background: theme.border }} />
+          <span style={{ color: theme.textMuted, fontSize: '0.7rem' }}>Diagram Engine</span>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <div style={{ background: 'rgba(124,58,237,0.2)', padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', color: '#a78bfa' }}>✨ Drag any node!</div>
-          <button onClick={handleToggleTheme} style={{ padding: '6px 12px', background: themeName === 'dark' ? 'rgba(251,191,36,0.2)' : 'rgba(99,102,241,0.2)', border: 'none', borderRadius: 20, color: themeName === 'dark' ? '#FBBF24' : '#6366F1', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }} title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}>
-            {themeName === 'dark' ? '☀️ Light' : '🌙 Dark'}
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button onClick={handleToggleTheme} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}>
+            {themeName === 'dark' ? '☀️' : '🌙'}
           </button>
-          <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 12px', background: 'rgba(245,158,11,0.2)', border: 'none', borderRadius: 20, color: '#F59E0B', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }} title="Keyboard Shortcuts (?)">
-            ⌨️ Keys
+          <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title="Keyboard Shortcuts (?)">
+            ⌨️
           </button>
-          <a href="/guide.html" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 12px', background: 'rgba(16,185,129,0.2)', border: 'none', borderRadius: 20, color: '#10B981', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, textDecoration: 'none' }}>
-            📖 Guide
+          <a href="/guide.html" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}>
+            📖
           </a>
-          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 12px', background: showAIChat ? 'linear-gradient(135deg, #7C3AED, #6366F1)' : 'rgba(124,58,237,0.2)', border: 'none', borderRadius: 20, color: '#fff', fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+          <div style={{ height: 20, width: 1, background: theme.border, margin: '0 4px' }} />
+          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 14px', background: showAIChat ? 'linear-gradient(135deg, #7C3AED, #6366F1)' : `${COLORS.purple}20`, border: `1px solid ${showAIChat ? 'transparent' : COLORS.purple}`, borderRadius: 6, color: showAIChat ? '#fff' : COLORS.purple, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
             🤖 AI Chat
           </button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, padding: '8px 20px', flexWrap: 'wrap', borderBottom: `1px solid ${theme.border}`, background: theme.toolbarBg, alignItems: 'center' }}>
-        {Object.keys(DEMOS).map(key => (
-          <button key={key} onClick={() => handleTypeChange(key)} style={{ padding: '4px 8px', background: active === key ? theme.buttonActiveBg : theme.buttonBg, border: `1px solid ${active === key ? COLORS.purple : theme.border}`, borderRadius: 6, color: active === key ? '#a78bfa' : theme.textSecondary, fontSize: '0.65rem', cursor: 'pointer' }}>{DEMOS[key].title}</button>
-        ))}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
-          <button onClick={undoHistory} disabled={!canUndo} style={{ padding: '4px 8px', background: canUndo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canUndo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canUndo ? COLORS.slate : '#444', fontSize: '0.65rem', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }} title="Undo (Cmd+Z)">↩ Undo</button>
-          <button onClick={redoHistory} disabled={!canRedo} style={{ padding: '4px 8px', background: canRedo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canRedo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canRedo ? COLORS.slate : '#444', fontSize: '0.65rem', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }} title="Redo (Cmd+Shift+Z)">↪ Redo</button>
-          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-          {exportStatus.message && (
-            <span style={{ padding: '4px 8px', background: exportStatus.message.startsWith('Error') ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)', borderRadius: 6, color: exportStatus.message.startsWith('Error') ? COLORS.red : COLORS.green, fontSize: '0.65rem' }}>
-              {exportStatus.loading && '⏳ '}{exportStatus.message}
-            </span>
-          )}
-          <button onClick={handleCopyToClipboard} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(14,165,233,0.2)', border: '1px solid rgba(14,165,233,0.3)', borderRadius: 6, color: COLORS.blue, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Copy to Clipboard">📋 Copy</button>
-          <button onClick={handleExportPNG} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(236,72,153,0.2)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, color: COLORS.pink, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as PNG">🖼️ PNG</button>
-          <button onClick={handleExportSVG} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 6, color: COLORS.violet, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as SVG">📐 SVG</button>
-          <button onClick={handleExportPDF} disabled={exportStatus.loading} style={{ padding: '4px 8px', background: 'rgba(245,158,11,0.2)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, color: COLORS.orange, fontSize: '0.65rem', cursor: exportStatus.loading ? 'not-allowed' : 'pointer', opacity: exportStatus.loading ? 0.5 : 1 }} title="Export as PDF">📄 PDF</button>
-          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-          <button onClick={handleSave} style={{ padding: '4px 8px', background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, color: COLORS.green, fontSize: '0.65rem', cursor: 'pointer' }} title="Save to browser storage">💾 Save</button>
-          <button onClick={handleExportFile} style={{ padding: '4px 8px', background: 'rgba(59,130,246,0.2)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, color: '#3B82F6', fontSize: '0.65rem', cursor: 'pointer' }} title="Export as .ddflow file">📥 Export</button>
-          <button onClick={() => setShowRecentFiles(true)} style={{ padding: '4px 8px', background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 6, color: '#a78bfa', fontSize: '0.65rem', cursor: 'pointer' }} title="Open recent diagrams">📂 Open</button>
-          <button onClick={() => setShowTemplateGallery(true)} style={{ padding: '4px 8px', background: 'rgba(236,72,153,0.2)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, color: COLORS.pink, fontSize: '0.65rem', cursor: 'pointer' }} title="Browse template gallery">📋 Templates</button>
-          <button onClick={() => setShowSaveTemplate(true)} style={{ padding: '4px 8px', background: 'rgba(245,158,11,0.2)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, color: COLORS.orange, fontSize: '0.65rem', cursor: 'pointer' }} title="Save current diagram as template">⭐ Save Template</button>
-          <button onClick={handleToggleAutoSave} style={{ padding: '4px 8px', background: autoSaveEnabled ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', border: `1px solid ${autoSaveEnabled ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: autoSaveEnabled ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }} title={autoSaveEnabled ? 'Auto-save is ON' : 'Auto-save is OFF'}>{autoSaveEnabled ? '🔄 Auto' : '⏸️ Auto'}</button>
-          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-          <button onClick={() => setShowMermaidImport(true)} style={{ padding: '4px 8px', background: 'rgba(6,182,212,0.2)', border: '1px solid rgba(6,182,212,0.3)', borderRadius: 6, color: COLORS.cyan, fontSize: '0.65rem', cursor: 'pointer' }} title="Import from Mermaid">🧜‍♀️ Mermaid</button>
-          <button onClick={() => setShowMermaidExport(true)} style={{ padding: '4px 8px', background: 'rgba(168,85,247,0.2)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, color: '#A855F7', fontSize: '0.65rem', cursor: 'pointer' }} title="Export as Mermaid">📤 .mmd</button>
-          <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-          <button onClick={() => setShowEditor(!showEditor)} style={{ padding: '4px 8px', background: showEditor ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.05)', border: `1px solid ${showEditor ? COLORS.green : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showEditor ? COLORS.green : '#666', fontSize: '0.65rem', cursor: 'pointer' }}>{showEditor ? '✓ Editor' : '</>'}</button>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', gap: 10, padding: '10px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.toolbarBg, alignItems: 'center' }}>
+        {/* Diagram Type Selector */}
+        <DiagramTypeSelector
+          activeType={active}
+          onTypeChange={handleTypeChange}
+          theme={theme}
+        />
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 28, background: theme.border }} />
+
+        {/* File Menu */}
+        <DropdownMenu
+          label="File"
+          icon="📁"
+          color={COLORS.blue}
+          theme={theme}
+          items={[
+            { type: 'section', label: 'Create' },
+            { icon: '📋', label: 'Browse Templates', description: 'Start from a template', onClick: () => setShowTemplateGallery(true) },
+            { icon: '⭐', label: 'Save as Template', description: 'Save current as template', onClick: () => setShowSaveTemplate(true) },
+            { type: 'divider' },
+            { type: 'section', label: 'Save & Open' },
+            { icon: '💾', label: 'Save', description: 'Save to browser', shortcut: '⌘S', onClick: handleSave },
+            { icon: '📥', label: 'Export File', description: 'Download .ddflow', onClick: handleExportFile },
+            { icon: '📂', label: 'Open Recent', description: 'Open saved diagrams', onClick: () => setShowRecentFiles(true) },
+            { type: 'divider' },
+            { icon: autoSaveEnabled ? '✓' : '○', label: 'Auto-save', description: autoSaveEnabled ? 'Enabled' : 'Disabled', onClick: handleToggleAutoSave, active: autoSaveEnabled },
+          ]}
+        />
+
+        {/* Export Menu */}
+        <DropdownMenu
+          label="Export"
+          icon="📤"
+          color={COLORS.pink}
+          theme={theme}
+          items={[
+            { type: 'section', label: 'Image' },
+            { icon: '📋', label: 'Copy to Clipboard', shortcut: '⌘⇧C', onClick: handleCopyToClipboard, disabled: exportStatus.loading },
+            { icon: '🖼️', label: 'Export as PNG', shortcut: '⌘⇧P', onClick: handleExportPNG, disabled: exportStatus.loading },
+            { icon: '📐', label: 'Export as SVG', shortcut: '⌘⇧S', onClick: handleExportSVG, disabled: exportStatus.loading },
+            { icon: '📄', label: 'Export as PDF', onClick: handleExportPDF, disabled: exportStatus.loading },
+            { type: 'divider' },
+            { type: 'section', label: 'Code' },
+            { icon: '🧜‍♀️', label: 'Export as Mermaid', description: 'Convert to Mermaid syntax', onClick: () => setShowMermaidExport(true) },
+          ]}
+        />
+
+        {/* Import Menu */}
+        <DropdownMenu
+          label="Import"
+          icon="📥"
+          color={COLORS.cyan}
+          theme={theme}
+          items={[
+            { icon: '🧜‍♀️', label: 'Import Mermaid', description: 'Convert from Mermaid syntax', onClick: () => setShowMermaidImport(true) },
+            { icon: '📂', label: 'Open .ddflow File', description: 'Load saved diagram', onClick: () => setShowRecentFiles(true) },
+          ]}
+        />
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 28, background: theme.border }} />
+
+        {/* Undo/Redo */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button onClick={undoHistory} disabled={!canUndo} style={{ padding: '6px 10px', background: canUndo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canUndo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canUndo ? COLORS.slate : '#444', fontSize: '0.7rem', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5, display: 'flex', alignItems: 'center', gap: 4 }} title="Undo (Cmd+Z)">
+            <span>↩</span>
+          </button>
+          <button onClick={redoHistory} disabled={!canRedo} style={{ padding: '6px 10px', background: canRedo ? 'rgba(100,116,139,0.2)' : 'rgba(255,255,255,0.02)', border: `1px solid ${canRedo ? 'rgba(100,116,139,0.3)' : 'rgba(255,255,255,0.05)'}`, borderRadius: 6, color: canRedo ? COLORS.slate : '#444', fontSize: '0.7rem', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5, display: 'flex', alignItems: 'center', gap: 4 }} title="Redo (Cmd+Shift+Z)">
+            <span>↪</span>
+          </button>
         </div>
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Status Message */}
+        {exportStatus.message && (
+          <span style={{ padding: '5px 10px', background: exportStatus.message.startsWith('Error') ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)', borderRadius: 6, color: exportStatus.message.startsWith('Error') ? COLORS.red : COLORS.green, fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {exportStatus.loading && '⏳'}{exportStatus.message}
+          </span>
+        )}
+
+        {/* Editor Toggle */}
+        <button onClick={() => setShowEditor(!showEditor)} style={{ padding: '6px 12px', background: showEditor ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', border: `1px solid ${showEditor ? COLORS.green : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showEditor ? COLORS.green : (themeName === 'dark' ? '#888' : '#64748b'), fontSize: '0.7rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500 }}>
+          {showEditor ? '✓' : '◇'} Editor
+        </button>
       </div>
 
       <div style={{ display: 'flex', height: 'calc(100vh - 105px)' }}>
