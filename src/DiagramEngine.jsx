@@ -97,6 +97,44 @@ const COLORS = {
 const BRANCH_COLORS = [COLORS.purple, COLORS.blue, COLORS.green, COLORS.orange, COLORS.pink, COLORS.cyan, COLORS.violet, COLORS.teal];
 
 // ============================================
+// VISUAL STYLING HELPERS
+// ============================================
+
+// Generate gradient background for nodes
+const getNodeGradient = (color) => {
+  return `linear-gradient(135deg, ${color}38, ${color}15)`;
+};
+
+// Generate layered shadow for nodes based on state
+const getNodeShadow = (nodeColor, isDragging, isSelected) => {
+  if (isDragging) {
+    return `0 0 0 2px ${nodeColor}, 0 12px 28px ${nodeColor}50, 0 20px 40px rgba(0,0,0,0.25)`;
+  }
+  if (isSelected) {
+    return `0 0 0 3px rgba(124,58,237,0.7), 0 8px 24px rgba(124,58,237,0.35), 0 16px 32px ${nodeColor}25`;
+  }
+  return `0 2px 4px rgba(0,0,0,0.08), 0 8px 20px ${nodeColor}25, 0 16px 40px ${nodeColor}12`;
+};
+
+// Generate smooth cubic bezier path for connections
+const getCurvedPath = (sx, sy, tx, ty) => {
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const curvature = Math.min(dist * 0.25, 60);
+
+  // Horizontal-ish connections: curve horizontally
+  if (Math.abs(dx) > Math.abs(dy)) {
+    const dir = dx > 0 ? 1 : -1;
+    return `M ${sx} ${sy} C ${sx + curvature * dir} ${sy}, ${tx - curvature * dir} ${ty}, ${tx} ${ty}`;
+  }
+
+  // Vertical-ish connections: curve vertically
+  const dir = dy > 0 ? 1 : -1;
+  return `M ${sx} ${sy} C ${sx} ${sy + curvature * dir}, ${tx} ${ty - curvature * dir}, ${tx} ${ty}`;
+};
+
+// ============================================
 // UNIFIED CANVAS HOOK WITH DRAGGING
 // ============================================
 
@@ -2549,7 +2587,11 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
 
   const getBezier = (src, tgt) => {
     const sp = getPos(src), tp = getPos(tgt);
-    return `M ${sp.x + src.width + 5} ${sp.y} C ${(sp.x + src.width + tp.x) / 2} ${sp.y}, ${(sp.x + src.width + tp.x) / 2} ${tp.y}, ${tp.x - 5} ${tp.y}`;
+    const sx = sp.x + src.width + 5, sy = sp.y;
+    const tx = tp.x - 5, ty = tp.y;
+    const dx = tx - sx;
+    const curvature = Math.min(Math.abs(dx) * 0.4, 80);
+    return `M ${sx} ${sy} C ${sx + curvature} ${sy}, ${tx - curvature} ${ty}, ${tx} ${ty}`;
   };
 
   // Handle label edit complete
@@ -2618,7 +2660,7 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${30 * canvas.zoom}px ${30 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
-            {layout.edges.map(e => { const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target); return src && tgt ? <path key={e.id} d={getBezier(src, tgt)} fill="none" stroke={e.color} strokeWidth={2.5} opacity={0.7} /> : null; })}
+            {layout.edges.map(e => { const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target); if (!src || !tgt) return null; const path = getBezier(src, tgt); return (<g key={e.id}><path d={path} fill="none" stroke={e.color} strokeWidth={6} strokeOpacity={0.1} strokeLinecap="round" /><path d={path} fill="none" stroke={e.color} strokeWidth={3} strokeOpacity={0.25} strokeLinecap="round" /><path d={path} fill="none" stroke={e.color} strokeWidth={2} strokeOpacity={0.8} strokeLinecap="round" /></g>); })}
             {/* Selection box */}
             {canvas.isSelecting && canvas.selectionBox && (
               <rect
@@ -2646,13 +2688,13 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
                 style={{
                   position: 'absolute', left: pos.x, top: pos.y - 19, width: node.width, height: 38,
-                  background: node.level === 0 ? nodeColor : `${nodeColor}18`,
+                  background: node.level === 0 ? `linear-gradient(135deg, ${nodeColor}, ${nodeColor}dd)` : getNodeGradient(nodeColor),
                   border: `2px solid ${nodeColor}`,
-                  borderRadius: node.level === 0 ? 19 : 8,
+                  borderRadius: node.level === 0 ? 19 : 10,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   cursor: isDragging ? 'grabbing' : 'grab',
-                  boxShadow: isDragging ? `0 0 20px ${nodeColor}60` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : 'none',
-                  transition: isDragging ? 'none' : 'box-shadow 0.2s'
+                  boxShadow: getNodeShadow(nodeColor, isDragging, isSelected),
+                  transition: isDragging ? 'none' : 'box-shadow 0.2s, background 0.2s'
                 }}
               >
                 <EditableNodeLabel
@@ -2784,9 +2826,16 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
               const x1 = sp.x + (dx / dist) * 55, y1 = sp.y + (dy / dist) * 45;
               const x2 = tp.x - (dx / dist) * 55, y2 = tp.y - (dy / dist) * 45;
               const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+              // Use curved path instead of straight line
+              const path = getCurvedPath(x1, y1, x2, y2);
               return (
                 <g key={e.id}>
-                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#arch-arr)" opacity={0.7} />
+                  {/* Outer glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" />
+                  {/* Inner glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
+                  {/* Main stroke with dashes */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#arch-arr)" opacity={0.8} strokeLinecap="round" />
                   {e.label && (
                     <>
                       <rect x={midX - 45} y={midY - 10} width={90} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
@@ -2816,7 +2865,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: 75, background: `${nodeColor}20`, border: `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 20px ${nodeColor}30`, transition: isDragging ? 'none' : 'box-shadow 0.2s' };
+            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: 75, background: getNodeGradient(nodeColor), border: `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(nodeColor, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s' };
             if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = 85; }
             if (shape === 'hexagon') { style.clipPath = 'polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%)'; style.width = 145; }
             return (
@@ -2993,10 +3042,12 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDelete
 
               return (
                 <g key={edge.id}>
-                  {/* Background line */}
-                  <path d={path} fill="none" stroke="rgba(124,58,237,0.15)" strokeWidth={4} strokeLinecap="round" />
+                  {/* Outer glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" />
+                  {/* Inner glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
                   {/* Main line */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} markerEnd="url(#journey-arrow)" strokeLinecap="round" opacity="0.7" />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} markerEnd="url(#journey-arrow)" strokeLinecap="round" opacity="0.8" />
                   {/* Animated dots flowing in arrow direction */}
                   <path d={path} fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth={2} strokeLinecap="round" strokeDasharray="4,12">
                     <animate attributeName="stroke-dashoffset" from="16" to="0" dur="0.8s" repeatCount="indefinite" />
@@ -3026,7 +3077,7 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDelete
 
             if (node.shape === 'circle') {
               return (
-                <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                   <span style={{ fontSize: 24 }}>{node.icon}</span>
                   {canvas.editingNode === node.id ? (
                     <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }} />
@@ -3038,7 +3089,7 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDelete
             }
 
             return (
-              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
                 <span style={{ fontSize: 22 }}>{node.icon}</span>
                 {canvas.editingNode === node.id ? (
@@ -3894,8 +3945,8 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                   path = `M ${sx} ${sy} L ${sx} ${midY} L ${tx} ${midY} L ${tx} ${ty}`;
                 }
               } else {
-                // Curved (default)
-                path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
+                // Smooth curved (default) - use cubic bezier for smoother curves
+                path = getCurvedPath(sx, sy, tx, ty);
               }
               const isEditingThisEdge = canvas.editingEdge === e.id;
               const labelText = isEditingThisEdge ? canvas.edgeEditValue : (e.label || '');
@@ -3904,8 +3955,12 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                 <g key={e.id}>
                   {/* Invisible wider path for easier clicking */}
                   <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); canvas.handleEdgeContextMenu(ev, e.id); }} />
-                  <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd={edgeStyleProps.markerEnd} opacity={0.8} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
+                  {/* Outer glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+                  {/* Inner glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd={edgeStyleProps.markerEnd} opacity={0.9} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
                   {/* Edge label or edit input */}
                   {(labelText || isEditingThisEdge) && (
                     <g style={{ cursor: 'pointer' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }}>
@@ -4056,13 +4111,13 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               top: pos.y - nodeHeight / 2,
               width: nodeWidth,
               height: nodeHeight,
-              background: `${nodeColor}20`, border: `2px solid ${nodeColor}`,
+              background: getNodeGradient(nodeColor), border: `2px solid ${nodeColor}`,
               borderRadius: borderRadius,
               clipPath: clipPath,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               cursor: isDragging ? 'grabbing' : isResizing ? 'nwse-resize' : 'grab',
-              boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 15px ${nodeColor}20`,
-              transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
+              boxShadow: getNodeShadow(nodeColor, isDragging, isSelected),
+              transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s, background 0.2s', touchAction: 'none'
             };
             if (isDiamond) { style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; style.clipPath = undefined; }
             const isConnectionTarget = canvas.isConnecting && canvas.connectionTarget === node.id;
@@ -4377,7 +4432,17 @@ function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes,
               if (!tgt) return null;
               const sp = getPos(t), tp = getPos(tgt);
               const sy = sp.y + 44 + fi * 30 + 15, sx = sp.x + t.width, tx = tp.x, ty = tp.y + 22;
-              return <path key={`${t.name}-${f.name}`} d={`M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`} fill="none" stroke={COLORS.blue} strokeWidth={2} markerEnd="url(#erd-crow)" opacity={0.7} />;
+              const path = `M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`;
+              return (
+                <g key={`${t.name}-${f.name}`}>
+                  {/* Outer glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={8} strokeOpacity={0.1} strokeLinecap="round" />
+                  {/* Inner glow layer */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={4} strokeOpacity={0.25} strokeLinecap="round" />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2} markerEnd="url(#erd-crow)" opacity={0.8} strokeLinecap="round" />
+                </g>
+              );
             }) || [])}
             {/* Selection box */}
             {canvas.isSelecting && canvas.selectionBox && (
@@ -4405,7 +4470,7 @@ function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes,
                 onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, t.name, t.name)}
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, t.name)}
                 onTouchStart={(e) => canvas.handleNodeTouchStart(e, t.name, pos.x, pos.y)}
-                style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: theme.surface, border: `2px solid ${tableColor}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${tableColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : '0 4px 20px rgba(0,0,0,0.3)', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: `linear-gradient(180deg, ${theme.surface}, rgba(15,23,42,0.95))`, border: `2px solid ${tableColor}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(tableColor, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
               >
                 <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${tableColor}, ${tableColor}dd)` }}>
                   <span style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -4548,7 +4613,25 @@ function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
               const src = layout.devices.find(d => d.id === conn.source), tgt = layout.devices.find(d => d.id === conn.target);
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
-              return <g key={conn.id}><line x1={sp.x + 65} y1={sp.y + 55} x2={tp.x + 65} y2={tp.y + 55} stroke={COLORS.blue} strokeWidth={2} strokeDasharray="6,4" opacity={0.7} />{conn.protocol && <><rect x={(sp.x + tp.x) / 2 + 65 - 28} y={(sp.y + tp.y) / 2 + 55 - 10} width={56} height={18} rx={4} fill="rgba(0,0,0,0.8)" /><text x={(sp.x + tp.x) / 2 + 65} y={(sp.y + tp.y) / 2 + 55 + 3} textAnchor="middle" fill={COLORS.blue} fontSize={10}>{conn.protocol}</text></>}</g>;
+              const sx = sp.x + 65, sy = sp.y + 55, tx = tp.x + 65, ty = tp.y + 55;
+              const path = getCurvedPath(sx, sy, tx, ty);
+              const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
+              return (
+                <g key={conn.id}>
+                  {/* Outer glow */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" />
+                  {/* Inner glow */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2} strokeDasharray="6,4" opacity={0.8} strokeLinecap="round" />
+                  {conn.protocol && (
+                    <>
+                      <rect x={midX - 28} y={midY - 10} width={56} height={18} rx={4} fill="rgba(0,0,0,0.8)" />
+                      <text x={midX} y={midY + 3} textAnchor="middle" fill={COLORS.blue} fontSize={10}>{conn.protocol}</text>
+                    </>
+                  )}
+                </g>
+              );
             })}
             {/* Selection box */}
             {canvas.isSelecting && canvas.selectionBox && (
@@ -4576,7 +4659,7 @@ function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                 onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, device.id, device.label)}
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, device.id)}
                 onTouchStart={(e) => canvas.handleNodeTouchStart(e, device.id, pos.x, pos.y)}
-                style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: theme.surface, border: `2px solid ${deviceColor}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${deviceColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: getNodeGradient(deviceColor), border: `2px solid ${deviceColor}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(deviceColor, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
               >
                 <div style={{ fontSize: '2.5rem', marginBottom: 6 }}>{canvas.nodeIcons[device.id] || icons[device.type] || '📦'}</div>
                 <EditableNodeLabel
@@ -4731,9 +4814,15 @@ function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes,
               const midX = (startX + endX) / 2, midY = (startY + endY) / 2;
               const marker = rel.type === 'extends' ? 'url(#class-inherit)' : rel.type === 'composition' ? 'url(#class-diamond)' : 'url(#class-assoc)';
               const color = rel.type === 'extends' ? COLORS.purple : rel.type === 'composition' ? COLORS.orange : COLORS.blue;
+              const path = getCurvedPath(startX, startY, endX, endY);
               return (
                 <g key={i}>
-                  <line x1={startX} y1={startY} x2={endX} y2={endY} stroke={color} strokeWidth={2} strokeDasharray="8,4" markerEnd={marker} opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  {/* Outer glow */}
+                  <path d={path} fill="none" stroke={color} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" />
+                  {/* Inner glow */}
+                  <path d={path} fill="none" stroke={color} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={color} strokeWidth={2} strokeDasharray="8,4" markerEnd={marker} opacity={0.8} strokeLinecap="round" style={{ animation: 'flowDash 1s linear infinite' }} />
                   {rel.label && (
                     <g>
                       <rect x={midX - rel.label.length * 3.5 - 6} y={midY - 10} width={rel.label.length * 7 + 12} height={18} rx={4} fill="rgba(0,0,0,0.8)" />
@@ -4769,9 +4858,9 @@ function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes,
                 onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, cls.id, cls.name)}
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, cls.id)}
                 onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)}
-                style={{ position: 'absolute', left: pos.x, top: pos.y, width: cls.width, background: theme.surface, border: `2px solid ${classColor}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${classColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 20px ${classColor}15`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: cls.width, background: `linear-gradient(180deg, ${theme.surface}, rgba(15,23,42,0.95))`, border: `2px solid ${classColor}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(classColor, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
               >
-                <div style={{ padding: '10px 14px', background: `${classColor}30`, borderBottom: `1px solid ${classColor}` }}>
+                <div style={{ padding: '10px 14px', background: `linear-gradient(135deg, ${classColor}40, ${classColor}20)`, borderBottom: `1px solid ${classColor}` }}>
                   <EditableNodeLabel
                     isEditing={isEditing}
                     value={isEditing ? canvas.editValue : cls.name}
@@ -4919,7 +5008,17 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const sx = sp.x + 80, sy = sp.y + 70, tx = tp.x + 80, ty = tp.y, my = (sy + ty) / 2;
-              return <path key={e.id} d={`M ${sx} ${sy} L ${sx} ${my} L ${tx} ${my} L ${tx} ${ty}`} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" opacity={0.6} />;
+              const path = `M ${sx} ${sy} L ${sx} ${my} L ${tx} ${my} L ${tx} ${ty}`;
+              return (
+                <g key={e.id}>
+                  {/* Outer glow */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Inner glow */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" opacity={0.7} strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              );
             })}
             {/* Selection box */}
             {canvas.isSelecting && canvas.selectionBox && (
@@ -4933,7 +5032,7 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             return (
-              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 {canvas.editingNode === node.id ? (
                   <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }} />
                 ) : (
@@ -4988,7 +5087,16 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
               return (
                 <g key={p.id}>
                   <line x1={pos.x + 60} y1={85} x2={pos.x + 60} y2={85 + messages.length * 60 + 40} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="4,4" opacity={0.4} />
-                  <rect x={pos.x} y={30} width={120} height={45} rx={8} fill={`${BRANCH_COLORS[i % BRANCH_COLORS.length]}20`} stroke={BRANCH_COLORS[i % BRANCH_COLORS.length]} strokeWidth={2} style={{ cursor: canvas.dragging === p.id ? 'grabbing' : 'grab', touchAction: 'none' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, p.id, pos.x, 0); }} onTouchStart={(e) => { e.stopPropagation(); canvas.handleNodeTouchStart(e, p.id, pos.x, 0); }} />
+                  <defs>
+                    <linearGradient id={`seq-grad-${i}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor={BRANCH_COLORS[i % BRANCH_COLORS.length]} stopOpacity="0.35" />
+                      <stop offset="100%" stopColor={BRANCH_COLORS[i % BRANCH_COLORS.length]} stopOpacity="0.12" />
+                    </linearGradient>
+                    <filter id={`seq-shadow-${i}`} x="-50%" y="-50%" width="200%" height="200%">
+                      <feDropShadow dx="0" dy="4" stdDeviation="8" floodColor={BRANCH_COLORS[i % BRANCH_COLORS.length]} floodOpacity="0.3" />
+                    </filter>
+                  </defs>
+                  <rect x={pos.x} y={30} width={120} height={45} rx={8} fill={`url(#seq-grad-${i})`} stroke={BRANCH_COLORS[i % BRANCH_COLORS.length]} strokeWidth={2} filter={`url(#seq-shadow-${i})`} style={{ cursor: canvas.dragging === p.id ? 'grabbing' : 'grab', touchAction: 'none' }} onMouseDown={(e) => { e.stopPropagation(); canvas.handleNodeMouseDown(e, p.id, pos.x, 0); }} onTouchStart={(e) => { e.stopPropagation(); canvas.handleNodeTouchStart(e, p.id, pos.x, 0); }} />
                   <text x={pos.x + 60} y={58} textAnchor="middle" fill={theme.textPrimary} fontSize={13} fontWeight={600} style={{ pointerEvents: 'none' }}>{p.label}</text>
                 </g>
               );
@@ -4998,12 +5106,18 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
               if (!from || !to) return null;
               const fp = getPos(from), tp = getPos(to);
               const y = 110 + i * 60, fromX = fp.x + 60, toX = tp.x + 60;
+              const msgColor = msg.isReturn ? theme.textSecondary : COLORS.purple;
               return (
                 <g key={`msg-${i}`}>
-                  <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msg.isReturn ? theme.textSecondary : COLORS.purple} /></marker></defs>
-                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msg.isReturn ? theme.textSecondary : COLORS.purple} strokeWidth={2} strokeDasharray={msg.isReturn ? "4,3" : "none"} markerEnd={`url(#seq-arr-${i})`} />
+                  <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msgColor} /></marker></defs>
+                  {/* Outer glow */}
+                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={6} strokeOpacity={0.1} strokeLinecap="round" />
+                  {/* Inner glow */}
+                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
+                  {/* Main stroke */}
+                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={2} strokeDasharray={msg.isReturn ? "4,3" : "none"} markerEnd={`url(#seq-arr-${i})`} />
                   <rect x={Math.min(fromX, toX) + Math.abs(toX - fromX) / 2 - 50} y={y - 20} width={100} height={18} rx={4} fill="rgba(0,0,0,0.85)" />
-                  <text x={Math.min(fromX, toX) + Math.abs(toX - fromX) / 2} y={y - 7} textAnchor="middle" fill={msg.isReturn ? theme.textSecondary : COLORS.purple} fontSize={11}>{msg.label}</text>
+                  <text x={Math.min(fromX, toX) + Math.abs(toX - fromX) / 2} y={y - 7} textAnchor="middle" fill={msgColor} fontSize={11}>{msg.label}</text>
                 </g>
               );
             })}
@@ -5037,7 +5151,7 @@ function TimelineDiagram({ events, theme = THEMES.dark }) {
             const isDragging = canvas.dragging === event.id;
             return (
               <div key={event.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, event.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, event.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: 80, width: 190, cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
-                <div style={{ background: event.isMilestone ? `${COLORS.orange}15` : theme.surface, border: `2px solid ${color}`, borderRadius: 12, padding: 16, textAlign: 'center', minHeight: 110, boxShadow: isDragging ? `0 0 30px ${color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
+                <div style={{ background: event.isMilestone ? `linear-gradient(135deg, ${COLORS.orange}35, ${COLORS.orange}12)` : getNodeGradient(color), border: `2px solid ${color}`, borderRadius: 12, padding: 16, textAlign: 'center', minHeight: 110, boxShadow: getNodeShadow(color, isDragging, false), transition: isDragging ? 'none' : 'box-shadow 0.2s' }}>
                   {event.isMilestone && <div style={{ fontSize: '1.3rem', marginBottom: 6 }}>🎯</div>}
                   <div style={{ fontSize: '0.8rem', color, fontWeight: 600, marginBottom: 6 }}>{event.date}</div>
                   <div style={{ fontSize: '0.95rem', fontWeight: 700, color: theme.textPrimary }}>{event.label}</div>
@@ -5097,9 +5211,30 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
             {branches.map((b, i) => <text key={b.name} x={30} y={b.y + 5} fill={BRANCH_COLORS[i % BRANCH_COLORS.length]} fontSize={14} fontWeight={700}>{b.name}</text>)}
             {connections.map((c, i) => {
               const fp = getPos(c.from), tp = getPos(c.to);
-              if (c.type === 'seq') return <line key={i} x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y} stroke={c.color} strokeWidth={4} strokeLinecap="round" />;
+              if (c.type === 'seq') {
+                return (
+                  <g key={i}>
+                    {/* Outer glow */}
+                    <line x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y} stroke={c.color} strokeWidth={10} strokeOpacity={0.1} strokeLinecap="round" />
+                    {/* Inner glow */}
+                    <line x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y} stroke={c.color} strokeWidth={6} strokeOpacity={0.25} strokeLinecap="round" />
+                    {/* Main stroke */}
+                    <line x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y} stroke={c.color} strokeWidth={4} strokeLinecap="round" />
+                  </g>
+                );
+              }
               const mx = (fp.x + tp.x) / 2;
-              return <path key={i} d={`M ${fp.x} ${fp.y} C ${mx} ${fp.y}, ${mx} ${tp.y}, ${tp.x} ${tp.y}`} fill="none" stroke={c.color} strokeWidth={3} strokeDasharray={c.type === 'merge' ? '6,4' : 'none'} opacity={0.8} />;
+              const path = `M ${fp.x} ${fp.y} C ${mx} ${fp.y}, ${mx} ${tp.y}, ${tp.x} ${tp.y}`;
+              return (
+                <g key={i}>
+                  {/* Outer glow */}
+                  <path d={path} fill="none" stroke={c.color} strokeWidth={8} strokeOpacity={0.1} strokeLinecap="round" />
+                  {/* Inner glow */}
+                  <path d={path} fill="none" stroke={c.color} strokeWidth={5} strokeOpacity={0.25} strokeLinecap="round" />
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={c.color} strokeWidth={3} strokeDasharray={c.type === 'merge' ? '6,4' : 'none'} opacity={0.9} strokeLinecap="round" />
+                </g>
+              );
             })}
             {commits.map(c => {
               const pos = getPos(c);
@@ -5132,7 +5267,7 @@ function GanttDiagram({ tasks, theme = THEMES.dark }) {
           <div style={{ width: 160, paddingRight: 16, fontSize: '0.85rem', color: theme.textPrimary, fontWeight: 500 }}>{task.name}</div>
           <div style={{ flex: 1, position: 'relative', height: '100%' }}>
             {Array.from({ length: maxEnd + 1 }, (_, j) => <div key={j} style={{ position: 'absolute', left: j * 40, top: 0, bottom: 0, width: 1, background: theme.border }} />)}
-            <div style={{ position: 'absolute', left: task.start * 40 + 2, top: 10, width: task.duration * 40 - 4, height: 24, background: BRANCH_COLORS[i % BRANCH_COLORS.length], borderRadius: 6 }} />
+            <div style={{ position: 'absolute', left: task.start * 40 + 2, top: 10, width: task.duration * 40 - 4, height: 24, background: `linear-gradient(135deg, ${BRANCH_COLORS[i % BRANCH_COLORS.length]}, ${BRANCH_COLORS[i % BRANCH_COLORS.length]}cc)`, borderRadius: 6, boxShadow: `0 2px 8px ${BRANCH_COLORS[i % BRANCH_COLORS.length]}40` }} />
           </div>
         </div>
       ))}
@@ -6425,7 +6560,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
             return (
               <div key={actor.id} onClick={(e) => canvas.handleNodeClick(e, actor.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, actor.id, actor.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, actor.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, actor.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, actor.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 45, top: pos.y - 55, width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: isDragging ? 'grabbing' : 'grab', transition: isDragging ? 'none' : 'transform 0.2s', transform: isDragging ? 'scale(1.05)' : 'scale(1)', touchAction: 'none' }}>
                 {/* Modern avatar circle */}
-                <div style={{ width: 70, height: 70, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.pink}30, ${COLORS.purple}20)`, border: `2px solid ${isSelected ? COLORS.blue : COLORS.pink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 8px 32px ${COLORS.pink}40` : `0 4px 20px rgba(0,0,0,0.3)`, transition: 'box-shadow 0.2s' }}>
+                <div style={{ width: 70, height: 70, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.pink}35, ${COLORS.purple}15)`, border: `2px solid ${isSelected ? COLORS.blue : COLORS.pink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: getNodeShadow(COLORS.pink, isDragging, isSelected), transition: 'box-shadow 0.2s' }}>
                   <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
                     <circle cx="12" cy="8" r="4" stroke={COLORS.pink} strokeWidth="1.5" fill={`${COLORS.pink}20`} />
                     <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke={COLORS.pink} strokeWidth="1.5" strokeLinecap="round" fill="none" />
@@ -6448,7 +6583,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
             const isDragging = canvas.dragging === uc.id;
             const isSelected = canvas.selectedNodes.has(uc.id);
             return (
-              <div key={uc.id} onClick={(e) => canvas.handleNodeClick(e, uc.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, uc.id, uc.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, uc.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(124, 58, 237, 0.1))`, border: `1.5px solid ${isSelected ? COLORS.blue : 'rgba(14, 165, 233, 0.5)'}`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 8px 32px ${COLORS.blue}30, inset 0 0 20px ${COLORS.blue}10` : `0 4px 20px rgba(0,0,0,0.2), inset 0 0 15px rgba(255,255,255,0.03)`, backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
+              <div key={uc.id} onClick={(e) => canvas.handleNodeClick(e, uc.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, uc.id, uc.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, uc.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, ${COLORS.blue}25, ${COLORS.purple}15)`, border: `1.5px solid ${isSelected ? COLORS.blue : 'rgba(14, 165, 233, 0.5)'}`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(COLORS.blue, isDragging, isSelected), backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
                 {canvas.editingNode === uc.id ? (
                   <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center' }} />
                 ) : (
