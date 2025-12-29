@@ -4,6 +4,7 @@ import TemplateGallery from './components/TemplateGallery.jsx';
 import SaveTemplateModal from './components/SaveTemplateModal.jsx';
 import DropdownMenu from './components/DropdownMenu.jsx';
 import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
+import NodeLibrarySidebar from './components/NodeLibrarySidebar.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
@@ -7010,6 +7011,7 @@ export default function Demo() {
   const [showMermaidExport, setShowMermaidExport] = useState(false);
   const [showTemplateGallery, setShowTemplateGallery] = useState(false);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [showNodeLibrary, setShowNodeLibrary] = useState(false);
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
@@ -7368,6 +7370,15 @@ export default function Demo() {
     setShowEditor(true);
   };
 
+  // Handle dropping a node from the library
+  const handleDropNode = useCallback((nodeDsl) => {
+    // Append the new node DSL to the current source
+    const currentSource = source || demo.source;
+    const newSource = currentSource.trim() + '\n' + nodeDsl;
+    handleSourceChange(newSource);
+    setShowEditor(true); // Show editor so user can see the added node
+  }, [source, demo.source, handleSourceChange]);
+
   // Handle Mermaid import
   const handleMermaidImport = (type, dsl) => {
     setActive(type);
@@ -7482,6 +7493,14 @@ export default function Demo() {
           </button>
         </div>
 
+        {/* Divider */}
+        <div style={{ width: 1, height: 28, background: theme.border }} />
+
+        {/* Node Library Toggle */}
+        <button onClick={() => setShowNodeLibrary(!showNodeLibrary)} style={{ padding: '6px 12px', background: showNodeLibrary ? `${COLORS.orange}30` : 'rgba(255,255,255,0.05)', border: `1px solid ${showNodeLibrary ? COLORS.orange : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showNodeLibrary ? COLORS.orange : (themeName === 'dark' ? '#888' : '#64748b'), fontSize: '0.7rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500 }} title="Toggle Node Library">
+          {showNodeLibrary ? '📚' : '📦'} Nodes
+        </button>
+
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
@@ -7504,10 +7523,29 @@ export default function Demo() {
             <textarea value={source || demo.source} onChange={e => handleSourceChange(e.target.value)} style={{ width: '100%', height: '100%', background: theme.editorBg, border: 'none', padding: 12, color: theme.editorText, fontFamily: 'Monaco, monospace', fontSize: '0.65rem', lineHeight: 1.5, resize: 'none', outline: 'none', boxSizing: 'border-box', transition: 'background 0.3s ease, color 0.3s ease' }} />
           </div>
         )}
-        <div ref={diagramRef} style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, transition: 'margin-right 0.3s ease' }}>
+        <div
+          ref={diagramRef}
+          style={{ flex: 1, padding: 10, marginRight: showAIChat ? '380px' : 0, marginLeft: showNodeLibrary ? '260px' : 0, transition: 'margin 0.3s ease' }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const nodeDsl = e.dataTransfer.getData('text/plain');
+            if (nodeDsl) {
+              handleDropNode(nodeDsl);
+            }
+          }}
+        >
           <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} />
         </div>
       </div>
+
+      {/* Node Library Sidebar */}
+      <NodeLibrarySidebar
+        isOpen={showNodeLibrary}
+        diagramType={active}
+        theme={theme}
+        onAddNode={handleDropNode}
+      />
 
       <AIChatPanel isOpen={showAIChat} onClose={() => setShowAIChat(false)} onApplyDiagram={handleApplyDiagram} />
       <KeyboardShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
