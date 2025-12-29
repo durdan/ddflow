@@ -1518,20 +1518,43 @@ const Parsers = {
 
   flowchart: (text) => {
     const nodes = new Map(), edges = [], nodeOrder = [];
+
+    // Helper to parse node: (type) label or just label
+    const parseNode = (part) => {
+      part = part.trim();
+      // Try to match (type) label - allow multi-word in parens
+      const match = part.match(/^\(([^)]+)\)\s*(.*)$/);
+      if (match) {
+        const inParens = match[1].trim();
+        const afterParens = match[2].trim();
+        // Check if it's the bad pattern: (Label) Label (duplicate)
+        if (afterParens && inParens.toLowerCase() === afterParens.toLowerCase()) {
+          return { type: 'process', label: afterParens };
+        }
+        // Check if type is a valid keyword
+        const validTypes = ['start', 'end', 'process', 'decision', 'io', 'data', 'database', 'document'];
+        if (validTypes.includes(inParens.toLowerCase())) {
+          return { type: inParens.toLowerCase(), label: afterParens || inParens };
+        }
+        // Otherwise, it's a bad format - use content as label
+        return { type: 'process', label: afterParens || inParens };
+      }
+      return { type: 'process', label: part };
+    };
+
     // First pass: collect all nodes and edges
     text.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
       const parts = line.split(/\s*->\s*/);
       parts.forEach((part, i) => {
-        const match = part.match(/^\((\w+)\)\s*(.+)/) || [null, 'process', part];
-        const type = match[1] || 'process', label = (match[2] || part).trim();
+        const { type, label } = parseNode(part);
         const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
         if (!nodes.has(id)) { nodes.set(id, { id, type, label, x: 0, y: 0 }); nodeOrder.push(id); }
         if (i > 0) {
-          const prevLabel = (parts[i - 1].match(/^\(\w+\)\s*(.+)/) || [null, parts[i - 1]])[1].trim();
+          const { label: prevLabel } = parseNode(parts[i - 1]);
           const sourceId = prevLabel.toLowerCase().replace(/[^a-z0-9]/g, '_');
-          const edgeLabel = line.match(/->\s*\(?\w+\)?\s*([^:]+):\s*(.+)$/)?.[2] || '';
+          const edgeLabel = line.match(/->\s*\([^)]*\)\s*[^:]+:\s*(.+)$/)?.[1] || '';
           edges.push({ id: `e-${edges.length}`, source: sourceId, target: id, label: edgeLabel });
         }
       });
@@ -1544,38 +1567,73 @@ const Parsers = {
       if (!incoming.has(e.target)) incoming.set(e.target, []);
       incoming.get(e.target).push(e.source);
     });
+
+    // Calculate node dimensions based on label length
+    const calcNodeSize = (label) => {
+      const charWidth = 8;
+      const padding = 40;
+      const minWidth = 100;
+      const maxWidth = 180;
+      const width = Math.min(maxWidth, Math.max(minWidth, (label?.length || 5) * charWidth + padding));
+      // Height based on text wrapping (rough estimate)
+      const charsPerLine = Math.floor((width - 20) / charWidth);
+      const lines = Math.ceil((label?.length || 5) / charsPerLine);
+      const height = Math.max(60, 30 + lines * 18);
+      return { width, height };
+    };
+
+    // Add width/height to all nodes
+    nodes.forEach((node, id) => {
+      const size = calcNodeSize(node.label);
+      node.width = size.width;
+      node.height = size.height;
+    });
+
     // Find root nodes (no incoming edges)
     const roots = nodeOrder.filter(id => !incoming.has(id) || incoming.get(id).length === 0);
     const positioned = new Set();
-    const positionNode = (id, x, y, branchOffset = 0) => {
+    const depthColors = [COLORS.purple, COLORS.blue, COLORS.emerald, COLORS.orange, COLORS.pink, COLORS.cyan];
+
+    const positionNode = (id, x, y, branchOffset = 0, depth = 0) => {
       if (positioned.has(id)) return;
       const node = nodes.get(id);
       if (!node) return;
       node.x = x + branchOffset;
       node.y = y;
+      node.depth = depth;
+      // Assign color based on depth
+      node.color = depthColors[depth % depthColors.length];
       positioned.add(id);
       const children = outgoing.get(id) || [];
+      const nodeHeight = node.height || 60;
+      const verticalGap = nodeHeight + 40;
       if (children.length === 1) {
-        positionNode(children[0], x, y + 120, branchOffset);
+        positionNode(children[0], x, y + verticalGap, branchOffset, depth + 1);
       } else if (children.length >= 2) {
-        // Branch: first child goes left, second goes right
-        const spacing = 180;
+        // Branch: spread children horizontally
+        const spacing = 200;
+        const totalWidth = (children.length - 1) * spacing;
         children.forEach((childId, i) => {
-          const offset = (i === 0) ? -spacing/2 : (i === 1) ? spacing/2 : (i - 0.5) * spacing;
-          positionNode(childId, x, y + 120, offset);
+          const childNode = nodes.get(childId);
+          const childWidth = childNode?.width || 130;
+          const offset = -totalWidth / 2 + i * spacing;
+          positionNode(childId, x, y + verticalGap, offset, depth + 1);
         });
       }
     };
-    // Position from roots
-    let startX = 350;
-    roots.forEach((rootId, i) => { positionNode(rootId, startX + i * 200, 80); });
+
+    // Position from roots with more spacing
+    let startX = 400;
+    roots.forEach((rootId, i) => { positionNode(rootId, startX + i * 250, 100, 0, 0); });
     // Position any unpositioned nodes (disconnected)
-    let unposY = 80;
+    let unposY = 100;
     nodeOrder.forEach(id => {
       if (!positioned.has(id)) {
         const node = nodes.get(id);
-        node.x = 600; node.y = unposY;
-        unposY += 100;
+        node.x = 700; node.y = unposY;
+        node.depth = 0;
+        node.color = COLORS.gray;
+        unposY += (node.height || 60) + 40;
         positioned.add(id);
       }
     });
@@ -2439,19 +2497,47 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
 
   const layout = useMemo(() => {
     const nodes = [], edges = [];
+    const levelWidths = new Map(); // Track max width at each level
+    const NODE_GAP = 50; // Gap between levels
+
+    // Calculate node width based on label
+    const getNodeWidth = (label) => Math.max(120, (label?.length || 5) * 9 + 50);
+
+    // First pass: calculate max width at each level
+    const calcLevelWidths = (node, level) => {
+      const w = getNodeWidth(node.label);
+      levelWidths.set(level, Math.max(levelWidths.get(level) || 0, w));
+      if (node.children?.length && !collapsed.has(node.id)) {
+        node.children.forEach(child => calcLevelWidths(child, level + 1));
+      }
+    };
+
+    // Get X position for a level (cumulative widths + gaps)
+    const getLevelX = (level) => {
+      let x = 0;
+      for (let i = 0; i < level; i++) {
+        x += (levelWidths.get(i) || 120) + NODE_GAP;
+      }
+      return x;
+    };
+
     const getHeight = (node) => (!node.children?.length || collapsed.has(node.id)) ? 38 : node.children.reduce((s, c) => s + getHeight(c) + 16, -16);
+
     const layoutNode = (node, level, yOff, parentId, color) => {
-      const h = getHeight(node), y = yOff + h / 2, w = Math.max(120, (node.label?.length || 5) * 9 + 50);
+      const h = getHeight(node), y = yOff + h / 2, w = getNodeWidth(node.label);
       const c = level === 0 ? COLORS.purple : color;
-      nodes.push({ id: node.id, label: node.label || '', defaultX: level * 220, defaultY: y, width: w, level, color: c, hasChildren: node.children?.length > 0, isCollapsed: collapsed.has(node.id), childCount: node.children?.length || 0 });
+      const x = getLevelX(level);
+      nodes.push({ id: node.id, label: node.label || '', defaultX: x, defaultY: y, width: w, level, color: c, hasChildren: node.children?.length > 0, isCollapsed: collapsed.has(node.id), childCount: node.children?.length || 0 });
       if (parentId) edges.push({ id: `e-${parentId}-${node.id}`, source: parentId, target: node.id, color: c });
       if (node.children?.length && !collapsed.has(node.id)) {
         let cy = yOff;
         node.children.forEach((child, i) => { layoutNode(child, level + 1, cy, node.id, level === 0 ? BRANCH_COLORS[i % BRANCH_COLORS.length] : color); cy += getHeight(child) + 16; });
       }
     };
+
     if (data?.label) {
-      layoutNode(data, 0, 0, null, BRANCH_COLORS[0]);
+      calcLevelWidths(data, 0); // First pass: calculate level widths
+      layoutNode(data, 0, 0, null, BRANCH_COLORS[0]); // Second pass: layout with proper spacing
       if (nodes.length) { const minY = Math.min(...nodes.map(n => n.defaultY)), maxY = Math.max(...nodes.map(n => n.defaultY)); nodes.forEach(n => { n.defaultY += -(minY + maxY) / 2 + 300; }); }
     }
     return { nodes, edges };
@@ -3934,7 +4020,8 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
           {initNodes.map(node => {
             const pos = getPos(node);
             const s = styles[node.type] || styles.default;
-            const nodeColor = canvas.nodeColors[node.id] || s.color;
+            // Use node's parsed color, then canvas custom color, then type-based color
+            const nodeColor = canvas.nodeColors[node.id] || node.color || s.color;
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
@@ -3943,8 +4030,12 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
             const customShape = canvas.nodeShapes[node.id];
             const nodeShape = customShape || (node.type === 'decision' ? 'diamond' : (['start', 'end'].includes(node.type) ? 'pill' : 'rounded'));
             const isDiamond = nodeShape === 'diamond';
-            // Get custom size or default
-            const nodeSize = canvas.getNodeSize(node.id);
+            // Get custom size, then parsed size from node, then default
+            const canvasSize = canvas.getNodeSize(node.id);
+            const nodeSize = canvas.nodeSizes[node.id] ? canvasSize : {
+              width: node.width || canvasSize.width,
+              height: node.height || canvasSize.height
+            };
             const isCircle = nodeShape === 'circle';
             const circleSize = Math.max(nodeSize.width, nodeSize.height);
             const nodeWidth = isDiamond ? 70 : (isCircle ? circleSize : nodeSize.width);
@@ -7888,12 +7979,13 @@ export default function Demo() {
       <ImageImportModal
         isOpen={showImageImport}
         onClose={() => setShowImageImport(false)}
-        onImport={(type, dsl) => {
+        onImport={(type, dsl, name) => {
           setActive(type);
           setSource(dsl);
+          if (name) setDiagramName(name);
           setShowEditor(true);
           setShowImageImport(false);
-          setExportStatus({ loading: false, message: 'Diagram imported from image!' });
+          setExportStatus({ loading: false, message: `Diagram "${name || 'Imported'}" imported from image!` });
           setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
         }}
         theme={theme}

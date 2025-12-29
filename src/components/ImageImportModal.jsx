@@ -122,16 +122,20 @@ function ImageImportModal({ isOpen, onClose, onImport, theme }) {
     }
   };
 
+  const [selectedType, setSelectedType] = useState(null);
+
   const handleAnalyze = async () => {
     if (!image || !isAIConfigured()) return;
 
     setIsAnalyzing(true);
     setError(null);
     setResult(null);
+    setSelectedType(null);
 
     try {
       const extracted = await extractDiagramFromImage(image.base64, image.mimeType);
       setResult(extracted);
+      setSelectedType(extracted.type);
     } catch (err) {
       setError(err.message || 'Failed to analyze image. Please try again.');
     } finally {
@@ -141,8 +145,12 @@ function ImageImportModal({ isOpen, onClose, onImport, theme }) {
 
   const handleApply = () => {
     if (result && onImport) {
-      onImport(result.type, result.dsl);
+      onImport(selectedType || result.type, result.dsl, result.name);
     }
+  };
+
+  const handleTypeChange = (newType) => {
+    setSelectedType(newType);
   };
 
   const handleClear = () => {
@@ -541,9 +549,72 @@ function ImageImportModal({ isOpen, onClose, onImport, theme }) {
                     <span style={styles.resultIcon}>✅</span>
                     <span style={styles.resultTitle}>Diagram Extracted Successfully</span>
                   </div>
-                  <div style={styles.resultType}>
-                    Type: {result.type}
+
+                  {/* Diagram Name */}
+                  <div style={{ marginBottom: 12, padding: '8px 12px', background: `${COLORS.purple}15`, borderRadius: 8, border: `1px solid ${COLORS.purple}30` }}>
+                    <div style={{ fontSize: '0.7rem', color: theme?.textSecondary || '#888', marginBottom: 4 }}>DIAGRAM NAME</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 600, color: theme?.textPrimary || '#fff' }}>{result.name}</div>
                   </div>
+
+                  {/* Type Selection */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: '0.7rem', color: theme?.textSecondary || '#888', marginBottom: 8 }}>DIAGRAM TYPE</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {/* Primary detected type */}
+                      <button
+                        onClick={() => handleTypeChange(result.type)}
+                        style={{
+                          padding: '6px 14px',
+                          background: selectedType === result.type ? `${COLORS.green}20` : 'transparent',
+                          border: `2px solid ${selectedType === result.type ? COLORS.green : (isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)')}`,
+                          borderRadius: 8,
+                          color: selectedType === result.type ? COLORS.green : (theme?.textPrimary || '#fff'),
+                          fontSize: '0.85rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6
+                        }}
+                      >
+                        {selectedType === result.type && <span>✓</span>}
+                        {result.type}
+                        <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>(detected)</span>
+                      </button>
+
+                      {/* Alternative types */}
+                      {result.alternatives && result.alternatives.length > 0 && result.alternatives.map(alt => (
+                        <button
+                          key={alt}
+                          onClick={() => handleTypeChange(alt)}
+                          style={{
+                            padding: '6px 14px',
+                            background: selectedType === alt ? `${COLORS.blue}20` : 'transparent',
+                            border: `2px solid ${selectedType === alt ? COLORS.blue : (isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)')}`,
+                            borderRadius: 8,
+                            color: selectedType === alt ? COLORS.blue : (theme?.textSecondary || '#888'),
+                            fontSize: '0.85rem',
+                            fontWeight: 500,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6
+                          }}
+                        >
+                          {selectedType === alt && <span>✓</span>}
+                          {alt}
+                        </button>
+                      ))}
+                    </div>
+                    {result.alternatives && result.alternatives.length > 0 && (
+                      <div style={{ fontSize: '0.7rem', color: theme?.textMuted || '#666', marginTop: 6 }}>
+                        💡 Alternative types may render this data differently
+                      </div>
+                    )}
+                  </div>
+
+                  {/* DSL Preview */}
+                  <div style={{ fontSize: '0.7rem', color: theme?.textSecondary || '#888', marginBottom: 6 }}>DSL PREVIEW</div>
                   <div style={styles.dslPreview}>
                     {result.dsl}
                   </div>

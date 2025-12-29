@@ -577,9 +577,28 @@ export function parseDiagramType(response) {
   return match ? match[1] : 'flowchart'; // default to flowchart
 }
 
-// Extract DSL code (remove the type comment for cleaner display)
+// Parse diagram name from response
+export function parseDiagramName(response) {
+  const match = response.match(/<!--\s*name:\s*(.+?)\s*-->/);
+  return match ? match[1].trim() : null;
+}
+
+// Parse alternative diagram types from response
+export function parseAlternatives(response) {
+  const match = response.match(/<!--\s*alternatives:\s*(.+?)\s*-->/);
+  if (!match) return [];
+  const altStr = match[1].trim().toLowerCase();
+  if (altStr === 'none') return [];
+  return altStr.split(/[,\s]+/).map(s => s.trim()).filter(s => s && s !== 'none');
+}
+
+// Extract DSL code (remove all metadata comments for cleaner display)
 export function extractDSL(response) {
-  return response.replace(/<!--\s*type:\s*\w+\s*-->\n?/, '').trim();
+  return response
+    .replace(/<!--\s*type:\s*\w+\s*-->\n?/g, '')
+    .replace(/<!--\s*name:\s*.+?\s*-->\n?/g, '')
+    .replace(/<!--\s*alternatives:\s*.+?\s*-->\n?/g, '')
+    .trim();
 }
 
 // Main generate function
@@ -861,49 +880,82 @@ Return a JSON object with isValid, errors, warnings, and suggestions arrays.`;
 const IMAGE_ANALYSIS_PROMPT = `You are DDFlow's image analyzer. Analyze this image and extract the diagram structure.
 
 Your task:
-1. Identify the diagram type from these options: flowchart, architecture, sequence, erd, mindmap, state, timeline, orgchart, network, gantt, class, usecase, pie, quadrant, wireframe, journey, deployment, component, c4, requirement, activity, git
-2. Extract all nodes/components with their labels exactly as shown
-3. Extract all connections/relationships between nodes
-4. Generate valid DDFlow DSL code
+1. Identify the BEST diagram type for this image
+2. Extract a descriptive NAME/TITLE for the diagram
+3. Suggest ALTERNATIVE diagram types that could also work (if any)
+4. Extract all nodes/components with their labels
+5. Generate valid DDFlow DSL code
+
+DIAGRAM TYPE SELECTION GUIDE:
+- Circular/radial diagram with center → use MINDMAP (center = root, surrounding = children)
+- System with layers (clients, services, databases) → use ARCHITECTURE
+- Step-by-step process with arrows → use FLOWCHART
+- Message passing between entities → use SEQUENCE
+- Tree/hierarchy structure → use MINDMAP
+- Database tables → use ERD
+- Company structure → use ORGCHART
+
+RESPONSE FORMAT (must include all 3 metadata lines):
+<!-- type: typename -->
+<!-- name: Descriptive Diagram Name -->
+<!-- alternatives: type1, type2 OR none -->
+
+Then the DSL code.
 
 IMPORTANT RULES:
-1. Start your response with <!-- type: typename --> (e.g., <!-- type: flowchart -->)
-2. Use the exact DDFlow DSL syntax for the detected diagram type
-3. If the diagram type is unclear, default to flowchart
-4. Preserve all visible text labels exactly as they appear
-5. Include all connections/arrows you can identify
+1. MUST start with the 3 metadata comment lines
+2. Name should be descriptive (e.g., "User Authentication Flow", "E-commerce Architecture")
+3. Alternatives should list other valid types, or "none" if the chosen type is clearly best
+4. Use EXACT syntax for chosen diagram type
+5. NO explanations after metadata, ONLY DSL code
 
-DIAGRAM TYPE SYNTAX EXAMPLES:
+=== ARCHITECTURE (system layers) ===
+Layer types: [clients], [gateway], [services], [data], [cache], [queue], [storage]
 
-For flowchart:
+[clients] Web App, Mobile App
+[gateway] API Gateway
+[services] Auth Service, User Service
+[data] PostgreSQL, Redis
+
+Web App -> API Gateway
+API Gateway -> Auth Service
+
+=== MINDMAP (hierarchical - INDENTATION ONLY, NO ARROWS) ===
+Use for: tree structures, radial diagrams, org charts, concept maps
+
+Central Topic
+  Branch 1
+    Sub-item 1.1
+    Sub-item 1.2
+  Branch 2
+    Sub-item 2.1
+  Branch 3
+
+For circular/radial diagrams: center = root, surrounding items = branches
+
+=== FLOWCHART (process steps) ===
+Node types: (start), (end), (process), (decision), (io)
+IMPORTANT: Type must be one of the above keywords, NOT the label!
+
 (start) Begin
 Begin -> (process) Step 1
 Step 1 -> (decision) Check?
 Check? -> (end) Done
 
-For architecture:
-[clients] Web App, Mobile
-[services] API, Auth
-Web App -> API
+WRONG: (My Label) My Label  ← Don't repeat label as type!
+RIGHT: (process) My Label   ← Use keyword type, then label
 
-For sequence:
-participant A, B, C
-A -> B: message
-B --> A: response
+=== SEQUENCE (messages between participants) ===
+participant Client, Server, Database
+Client -> Server: Request
+Server -> Database: Query
+Database --> Server: Data
+Server --> Client: Response
 
-For mindmap (use indentation):
-Root Topic
-  Branch 1
-    Sub-branch
-  Branch 2
+=== ERD (database tables) ===
+CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));
 
-For erd (SQL syntax):
-CREATE TABLE users (
-  id INT PRIMARY KEY,
-  name VARCHAR(100)
-);
-
-Output ONLY the DSL code starting with the type comment. No explanations.`;
+Output ONLY the DSL code starting with the type comment.`;
 
 // OpenAI Vision API call
 async function callOpenAIWithImage(imageBase64, mimeType) {
@@ -1005,6 +1057,132 @@ async function callAnthropicWithImage(imageBase64, mimeType) {
 }
 
 // Extract diagram from image using AI vision
+// Clean up mindmap DSL that incorrectly uses arrows
+function cleanupMindmapDSL(dsl) {
+  // If the DSL contains arrows, it's incorrectly formatted
+  // Try to convert arrow-based format to proper indentation
+  if (!dsl.includes('->')) {
+    return dsl; // Already correct format
+  }
+
+  // First, join lines where arrow is split across multiple lines
+  // e.g., "Parent ->\nChild1, Child2" becomes "Parent -> Child1, Child2"
+  let normalizedDsl = dsl.replace(/->\s*\n\s*/g, '-> ');
+
+  // Also handle cases where commas split children across lines
+  normalizedDsl = normalizedDsl.replace(/,\s*\n\s*(?![A-Z])/g, ', ');
+
+  // Parse the arrow-based DSL and convert to indentation
+  const lines = normalizedDsl.split('\n').filter(l => l.trim());
+  const relationships = new Map(); // parent -> [children]
+  const allNodes = new Set();
+  const childNodes = new Set();
+
+  lines.forEach(line => {
+    const arrowMatch = line.match(/^(.+?)\s*->\s*(.+)$/);
+    if (arrowMatch) {
+      const parent = arrowMatch[1].trim();
+      const childrenStr = arrowMatch[2].trim();
+      // Handle multiple children: "Parent -> Child1, Child2, Child3"
+      const children = childrenStr.split(',').map(c => c.trim()).filter(c => c);
+
+      allNodes.add(parent);
+      children.forEach(c => {
+        allNodes.add(c);
+        childNodes.add(c);
+      });
+
+      if (!relationships.has(parent)) {
+        relationships.set(parent, []);
+      }
+      relationships.get(parent).push(...children);
+    } else if (line.trim() && !line.includes('->')) {
+      // Standalone node (could be root)
+      allNodes.add(line.trim());
+    }
+  });
+
+  // Find root nodes (nodes that are never children)
+  const rootNodes = [...allNodes].filter(n => !childNodes.has(n));
+
+  if (rootNodes.length === 0) {
+    return dsl; // Can't determine structure, return original
+  }
+
+  // Build tree with indentation
+  const result = [];
+  const visited = new Set();
+
+  function buildTree(node, indent) {
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    result.push('  '.repeat(indent) + node);
+
+    const children = relationships.get(node) || [];
+    children.forEach(child => buildTree(child, indent + 1));
+  }
+
+  rootNodes.forEach(root => buildTree(root, 0));
+
+  return result.join('\n');
+}
+
+// Detect and fix bad flowchart syntax: (Label) Label -> (Label2) Label2
+// Convert to mindmap if it's clearly hierarchical
+function cleanupBadFlowchartDSL(dsl) {
+  // Check if DSL has pattern like (Full Label) Full Label (duplicate)
+  const badPattern = /^\s*\(([^)]+)\)\s+\1\s*$/m;
+  if (!badPattern.test(dsl)) {
+    return { dsl, convertToMindmap: false };
+  }
+
+  // This is hierarchical data with bad syntax - convert to mindmap
+  const lines = dsl.split('\n').filter(l => l.trim());
+  const relationships = new Map();
+  const allNodes = new Set();
+  const childNodes = new Set();
+
+  lines.forEach(line => {
+    // Match: (Label1) Label1 -> (Label2) Label2
+    const arrowMatch = line.match(/^\s*\(([^)]+)\)\s+\1\s*->\s*\(([^)]+)\)\s+\2\s*$/);
+    if (arrowMatch) {
+      const parent = arrowMatch[1].trim();
+      const child = arrowMatch[2].trim();
+      allNodes.add(parent);
+      allNodes.add(child);
+      childNodes.add(child);
+      if (!relationships.has(parent)) relationships.set(parent, []);
+      relationships.get(parent).push(child);
+    } else {
+      // Match standalone: (Label) Label
+      const standaloneMatch = line.match(/^\s*\(([^)]+)\)\s+\1\s*$/);
+      if (standaloneMatch) {
+        allNodes.add(standaloneMatch[1].trim());
+      }
+    }
+  });
+
+  // Find root nodes
+  const rootNodes = [...allNodes].filter(n => !childNodes.has(n));
+  if (rootNodes.length === 0) return { dsl, convertToMindmap: false };
+
+  // Build mindmap with indentation
+  const result = [];
+  const visited = new Set();
+
+  function buildTree(node, indent) {
+    if (visited.has(node)) return;
+    visited.add(node);
+    result.push('  '.repeat(indent) + node);
+    const children = relationships.get(node) || [];
+    children.forEach(child => buildTree(child, indent + 1));
+  }
+
+  rootNodes.forEach(root => buildTree(root, 0));
+  return { dsl: result.join('\n'), convertToMindmap: true };
+}
+
 export async function extractDiagramFromImage(imageBase64, mimeType = 'image/png') {
   const provider = import.meta.env.VITE_AI_PROVIDER || 'openai';
 
@@ -1015,11 +1193,36 @@ export async function extractDiagramFromImage(imageBase64, mimeType = 'image/png
     response = await callOpenAIWithImage(imageBase64, mimeType);
   }
 
-  const diagramType = parseDiagramType(response);
-  const dsl = extractDSL(response);
+  let diagramType = parseDiagramType(response);
+  let dsl = extractDSL(response);
+  const name = parseDiagramName(response);
+  let alternatives = parseAlternatives(response);
+
+  // Post-process mindmap DSL if it contains arrows (common AI mistake)
+  if ((diagramType === 'mindmap' || diagramType === 'orgchart') && dsl.includes('->')) {
+    dsl = cleanupMindmapDSL(dsl);
+  }
+
+  // Post-process flowchart with bad syntax: (Label) Label pattern
+  if (diagramType === 'flowchart') {
+    const result = cleanupBadFlowchartDSL(dsl);
+    if (result.convertToMindmap) {
+      // Type was converted, add original flowchart as alternative
+      if (!alternatives.includes('flowchart')) {
+        alternatives = ['flowchart', ...alternatives];
+      }
+      diagramType = 'mindmap';
+      dsl = result.dsl;
+    }
+  }
+
+  // Filter alternatives to remove the current type
+  alternatives = alternatives.filter(alt => alt !== diagramType);
 
   return {
     type: diagramType,
+    name: name || 'Imported Diagram',
+    alternatives,
     dsl,
     raw: response
   };
