@@ -853,3 +853,174 @@ Return a JSON object with isValid, errors, warnings, and suggestions arrays.`;
     };
   }
 }
+
+// ============================================
+// IMAGE ANALYSIS (VISION API)
+// ============================================
+
+const IMAGE_ANALYSIS_PROMPT = `You are DDFlow's image analyzer. Analyze this image and extract the diagram structure.
+
+Your task:
+1. Identify the diagram type from these options: flowchart, architecture, sequence, erd, mindmap, state, timeline, orgchart, network, gantt, class, usecase, pie, quadrant, wireframe, journey, deployment, component, c4, requirement, activity, git
+2. Extract all nodes/components with their labels exactly as shown
+3. Extract all connections/relationships between nodes
+4. Generate valid DDFlow DSL code
+
+IMPORTANT RULES:
+1. Start your response with <!-- type: typename --> (e.g., <!-- type: flowchart -->)
+2. Use the exact DDFlow DSL syntax for the detected diagram type
+3. If the diagram type is unclear, default to flowchart
+4. Preserve all visible text labels exactly as they appear
+5. Include all connections/arrows you can identify
+
+DIAGRAM TYPE SYNTAX EXAMPLES:
+
+For flowchart:
+(start) Begin
+Begin -> (process) Step 1
+Step 1 -> (decision) Check?
+Check? -> (end) Done
+
+For architecture:
+[clients] Web App, Mobile
+[services] API, Auth
+Web App -> API
+
+For sequence:
+participant A, B, C
+A -> B: message
+B --> A: response
+
+For mindmap (use indentation):
+Root Topic
+  Branch 1
+    Sub-branch
+  Branch 2
+
+For erd (SQL syntax):
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name VARCHAR(100)
+);
+
+Output ONLY the DSL code starting with the type comment. No explanations.`;
+
+// OpenAI Vision API call
+async function callOpenAIWithImage(imageBase64, mimeType) {
+  const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+  const model = import.meta.env.VITE_AI_MODEL || 'gpt-4o';
+
+  if (!apiKey) {
+    throw new Error('OpenAI API key not configured. Please set VITE_OPENAI_API_KEY in .env');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: IMAGE_ANALYSIS_PROMPT },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${mimeType};base64,${imageBase64}`,
+                detail: 'high'
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 4096
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'OpenAI Vision API request failed');
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+// Anthropic Vision API call
+async function callAnthropicWithImage(imageBase64, mimeType) {
+  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+  const model = import.meta.env.VITE_AI_MODEL || 'claude-sonnet-4-20250514';
+
+  if (!apiKey) {
+    throw new Error('Anthropic API key not configured. Please set VITE_ANTHROPIC_API_KEY in .env');
+  }
+
+  // Map common MIME types to Anthropic-supported formats
+  const mediaType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType,
+                data: imageBase64
+              }
+            },
+            {
+              type: 'text',
+              text: IMAGE_ANALYSIS_PROMPT
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Anthropic Vision API request failed');
+  }
+
+  const data = await response.json();
+  return data.content[0].text;
+}
+
+// Extract diagram from image using AI vision
+export async function extractDiagramFromImage(imageBase64, mimeType = 'image/png') {
+  const provider = import.meta.env.VITE_AI_PROVIDER || 'openai';
+
+  let response;
+  if (provider === 'anthropic') {
+    response = await callAnthropicWithImage(imageBase64, mimeType);
+  } else {
+    response = await callOpenAIWithImage(imageBase64, mimeType);
+  }
+
+  const diagramType = parseDiagramType(response);
+  const dsl = extractDSL(response);
+
+  return {
+    type: diagramType,
+    dsl,
+    raw: response
+  };
+}

@@ -6,6 +6,7 @@ import DropdownMenu from './components/DropdownMenu.jsx';
 import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
 import NodeLibrarySidebar from './components/NodeLibrarySidebar.jsx';
 import ColorSettingsPanel from './components/ColorSettingsPanel.jsx';
+import ImageImportModal from './components/ImageImportModal.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { explainDiagram, suggestImprovements, validateDiagram, isAIConfigured } from './services/aiService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
@@ -7017,6 +7018,7 @@ export default function Demo() {
   const [showAIResult, setShowAIResult] = useState(null); // { type: 'explain' | 'improve' | 'validate', content: any, loading: boolean }
   const [aiLoading, setAiLoading] = useState(false);
   const [showColorSettings, setShowColorSettings] = useState(false);
+  const [showImageImport, setShowImageImport] = useState(false);
   const [colorSettings, setColorSettings] = useState(() => getColorSettings());
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
@@ -7557,6 +7559,7 @@ export default function Demo() {
           color={COLORS.cyan}
           theme={theme}
           items={[
+            { icon: '🖼️', label: 'Import from Image', description: 'AI extracts diagram from image', onClick: () => setShowImageImport(true) },
             { icon: '🧜‍♀️', label: 'Import Mermaid', description: 'Convert from Mermaid syntax', onClick: () => setShowMermaidImport(true) },
             { icon: '📂', label: 'Open .ddflow File', description: 'Load saved diagram', onClick: () => setShowRecentFiles(true) },
           ]}
@@ -7878,6 +7881,21 @@ export default function Demo() {
         isOpen={showColorSettings}
         onClose={() => setShowColorSettings(false)}
         onApply={setColorSettings}
+        theme={theme}
+      />
+
+      {/* Image Import Modal */}
+      <ImageImportModal
+        isOpen={showImageImport}
+        onClose={() => setShowImageImport(false)}
+        onImport={(type, dsl) => {
+          setActive(type);
+          setSource(dsl);
+          setShowEditor(true);
+          setShowImageImport(false);
+          setExportStatus({ loading: false, message: 'Diagram imported from image!' });
+          setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+        }}
         theme={theme}
       />
     </div>
