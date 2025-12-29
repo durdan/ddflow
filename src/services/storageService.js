@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
   CURRENT_DIAGRAM: 'ddflow_current_diagram',
   RECENT_FILES: 'ddflow_recent_files',
   AUTO_SAVE_ENABLED: 'ddflow_autosave_enabled',
+  COLOR_SETTINGS: 'ddflow_color_settings',
 };
 
 const MAX_RECENT_FILES = 10;
@@ -261,5 +262,106 @@ export function formatDate(isoString) {
     return date.toLocaleDateString();
   } catch (e) {
     return 'Unknown';
+  }
+}
+
+// ============================================
+// COLOR SETTINGS
+// ============================================
+
+// Default accent colors
+export const DEFAULT_COLOR_SETTINGS = {
+  accentPrimary: '#7C3AED',    // Main accent (purple)
+  accentSecondary: '#6366F1',  // Secondary accent (indigo)
+  selection: '#0EA5E9',        // Selection highlight (blue)
+  success: '#10B981',          // Success states (green)
+  warning: '#F59E0B',          // Warning states (orange)
+  error: '#EF4444',            // Error states (red)
+};
+
+// Preset color themes
+export const COLOR_PRESETS = {
+  purple: {
+    name: 'Purple (Default)',
+    icon: '💜',
+    accentPrimary: '#7C3AED',
+    accentSecondary: '#6366F1',
+  },
+  blue: {
+    name: 'Ocean Blue',
+    icon: '💙',
+    accentPrimary: '#0EA5E9',
+    accentSecondary: '#3B82F6',
+  },
+  green: {
+    name: 'Forest Green',
+    icon: '💚',
+    accentPrimary: '#10B981',
+    accentSecondary: '#059669',
+  },
+  orange: {
+    name: 'Sunset Orange',
+    icon: '🧡',
+    accentPrimary: '#F59E0B',
+    accentSecondary: '#D97706',
+  },
+  pink: {
+    name: 'Rose Pink',
+    icon: '💗',
+    accentPrimary: '#EC4899',
+    accentSecondary: '#DB2777',
+  },
+  cyan: {
+    name: 'Teal Cyan',
+    icon: '💠',
+    accentPrimary: '#06B6D4',
+    accentSecondary: '#14B8A6',
+  },
+  red: {
+    name: 'Ruby Red',
+    icon: '❤️',
+    accentPrimary: '#EF4444',
+    accentSecondary: '#DC2626',
+  },
+};
+
+/**
+ * Get saved color settings
+ * @returns {Object} Color settings object
+ */
+export function getColorSettings() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.COLOR_SETTINGS);
+    if (saved) {
+      return { ...DEFAULT_COLOR_SETTINGS, ...JSON.parse(saved) };
+    }
+  } catch (e) {
+    console.error('Failed to load color settings:', e);
+  }
+  return { ...DEFAULT_COLOR_SETTINGS };
+}
+
+/**
+ * Save color settings
+ * @param {Object} settings - Color settings to save
+ */
+export function saveColorSettings(settings) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.COLOR_SETTINGS, JSON.stringify(settings));
+    return true;
+  } catch (e) {
+    console.error('Failed to save color settings:', e);
+    return false;
+  }
+}
+
+/**
+ * Reset color settings to defaults
+ */
+export function resetColorSettings() {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.COLOR_SETTINGS);
+  } catch (e) {
+    console.error('Failed to reset color settings:', e);
   }
 }

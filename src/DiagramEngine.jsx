@@ -5,10 +5,11 @@ import SaveTemplateModal from './components/SaveTemplateModal.jsx';
 import DropdownMenu from './components/DropdownMenu.jsx';
 import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
 import NodeLibrarySidebar from './components/NodeLibrarySidebar.jsx';
+import ColorSettingsPanel from './components/ColorSettingsPanel.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { explainDiagram, suggestImprovements, validateDiagram, isAIConfigured } from './services/aiService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
-import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled } from './services/storageService.js';
+import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled, getColorSettings, saveColorSettings, DEFAULT_COLOR_SETTINGS } from './services/storageService.js';
 import { mermaidToDDFlow, ddflowToMermaid, downloadMermaidFile, copyMermaidToClipboard, detectMermaidType } from './services/mermaidService.js';
 import useUndoRedo from './hooks/useUndoRedo.js';
 
@@ -7015,11 +7016,22 @@ export default function Demo() {
   const [showNodeLibrary, setShowNodeLibrary] = useState(false);
   const [showAIResult, setShowAIResult] = useState(null); // { type: 'explain' | 'improve' | 'validate', content: any, loading: boolean }
   const [aiLoading, setAiLoading] = useState(false);
+  const [showColorSettings, setShowColorSettings] = useState(false);
+  const [colorSettings, setColorSettings] = useState(() => getColorSettings());
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
   const [themeName, setThemeName] = useState(() => getSavedTheme());
-  const theme = THEMES[themeName] || THEMES.dark;
+  const baseTheme = THEMES[themeName] || THEMES.dark;
+
+  // Apply custom accent colors to theme
+  const theme = useMemo(() => ({
+    ...baseTheme,
+    // Override accent-related styles with custom colors
+    buttonActiveBg: `${colorSettings.accentPrimary}30`,
+    gridColor: `${colorSettings.accentPrimary}08`,
+    logoGradient: `linear-gradient(135deg, ${baseTheme.name === 'dark' ? '#fff' : '#1e293b'}, ${colorSettings.accentPrimary})`,
+  }), [baseTheme, colorSettings]);
   const diagramRef = useRef(null);
   const autoSaveTimeoutRef = useRef(null);
   const isSyncingFromHistoryRef = useRef(false);
@@ -7475,11 +7487,14 @@ export default function Demo() {
           <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title="Keyboard Shortcuts (?)">
             ⌨️
           </button>
+          <button onClick={() => setShowColorSettings(true)} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title="Color Settings">
+            🎨
+          </button>
           <a href="/guide.html" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}>
             📖
           </a>
           <div style={{ height: 20, width: 1, background: theme.border, margin: '0 4px' }} />
-          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 14px', background: showAIChat ? 'linear-gradient(135deg, #7C3AED, #6366F1)' : `${COLORS.purple}20`, border: `1px solid ${showAIChat ? 'transparent' : COLORS.purple}`, borderRadius: 6, color: showAIChat ? '#fff' : COLORS.purple, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 14px', background: showAIChat ? `linear-gradient(135deg, ${colorSettings.accentPrimary}, ${colorSettings.accentSecondary})` : `${colorSettings.accentPrimary}20`, border: `1px solid ${showAIChat ? 'transparent' : colorSettings.accentPrimary}`, borderRadius: 6, color: showAIChat ? '#fff' : colorSettings.accentPrimary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
             🤖 AI Chat
           </button>
         </div>
@@ -7857,6 +7872,14 @@ export default function Demo() {
           </div>
         </div>
       )}
+
+      {/* Color Settings Panel */}
+      <ColorSettingsPanel
+        isOpen={showColorSettings}
+        onClose={() => setShowColorSettings(false)}
+        onApply={setColorSettings}
+        theme={theme}
+      />
     </div>
   );
 }
