@@ -122,6 +122,12 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   // Node colors state
   const [nodeColors, setNodeColors] = useState({});
 
+  // Node icons state
+  const [nodeIcons, setNodeIcons] = useState({});
+
+  // Node shapes state
+  const [nodeShapes, setNodeShapes] = useState({});
+
   // Node sizes state (for resize)
   const [nodeSizes, setNodeSizes] = useState({});
   const DEFAULT_NODE_SIZE = { width: 130, height: 60 };
@@ -154,8 +160,18 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
   // Edge styles state (solid, dashed, dotted, animated)
   const [edgeStyles, setEdgeStyles] = useState({});
 
+  // Edge arrow types state (triangle, open, diamond, circle, none)
+  const [edgeArrowTypes, setEdgeArrowTypes] = useState({});
+
+  // Edge path types state (curved or straight)
+  const [edgePathTypes, setEdgePathTypes] = useState({});
+
   // Edge context menu state
   const [edgeContextMenu, setEdgeContextMenu] = useState(null);
+
+  // Alignment guides state (shown when dragging nodes)
+  const [alignmentGuides, setAlignmentGuides] = useState({ horizontal: [], vertical: [] });
+  const ALIGNMENT_THRESHOLD = 5; // pixels threshold for snapping
 
   // Touch state for pinch-to-zoom
   const lastTouchDistance = useRef(null);
@@ -262,6 +278,22 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     setContextMenu(null);
   }, []);
 
+  // Set node icon
+  const setNodeIcon = useCallback((nodeId, icon) => {
+    setNodeIcons(prev => ({
+      ...prev,
+      [nodeId]: icon
+    }));
+  }, []);
+
+  // Set node shape
+  const setNodeShape = useCallback((nodeId, shape) => {
+    setNodeShapes(prev => ({
+      ...prev,
+      [nodeId]: shape
+    }));
+  }, []);
+
   // Clear selection
   const clearSelection = useCallback(() => {
     setSelectedNodes(new Set());
@@ -339,7 +371,23 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
       ...prev,
       [edgeId]: style
     }));
+  }, []);
+
+  // Set edge arrow type
+  const setEdgeArrowType = useCallback((edgeId, arrowType) => {
+    setEdgeArrowTypes(prev => ({
+      ...prev,
+      [edgeId]: arrowType
+    }));
     setEdgeContextMenu(null);
+  }, []);
+
+  // Set edge path type (curved or straight)
+  const setEdgePathType = useCallback((edgeId, pathType) => {
+    setEdgePathTypes(prev => ({
+      ...prev,
+      [edgeId]: pathType
+    }));
   }, []);
 
   // Get node size (custom or default)
@@ -452,20 +500,59 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
       setSelectionBox(prev => ({ ...prev, endX: point.x, endY: point.y }));
     } else if (dragging) {
       const point = getCanvasPoint(e.clientX, e.clientY);
-      const newX = point.x - dragOffset.x;
-      const newY = point.y - dragOffset.y;
+      let newX = point.x - dragOffset.x;
+      let newY = point.y - dragOffset.y;
+
+      // Apply grid snapping first
+      newX = snapToGridValue(newX);
+      newY = snapToGridValue(newY);
+
       setPositions(prev => ({
         ...prev,
-        [dragging]: {
-          x: snapToGridValue(newX),
-          y: snapToGridValue(newY)
-        }
+        [dragging]: { x: newX, y: newY }
       }));
+    } else {
+      // Clear alignment guides when not dragging
+      if (alignmentGuides.horizontal.length > 0 || alignmentGuides.vertical.length > 0) {
+        setAlignmentGuides({ horizontal: [], vertical: [] });
+      }
     }
-  }, [isPanning, panStart, resizing, updateResize, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint, snapToGridValue]);
+  }, [isPanning, panStart, resizing, updateResize, isConnecting, isSelecting, selectionBox, dragging, dragOffset, getCanvasPoint, snapToGridValue, alignmentGuides]);
+
+  // Update alignment guides based on current drag position and other nodes
+  const updateAlignmentGuides = useCallback((draggedNodeId, draggedPos, allNodes, getNodePos) => {
+    if (!draggedNodeId || !draggedPos) {
+      setAlignmentGuides({ horizontal: [], vertical: [] });
+      return;
+    }
+
+    const horizontal = [];
+    const vertical = [];
+
+    allNodes.forEach(node => {
+      if (node.id === draggedNodeId) return;
+
+      const nodePos = getNodePos(node);
+
+      // Check horizontal alignment (same y)
+      if (Math.abs(nodePos.y - draggedPos.y) < ALIGNMENT_THRESHOLD) {
+        horizontal.push({ y: nodePos.y, fromX: Math.min(nodePos.x, draggedPos.x) - 50, toX: Math.max(nodePos.x, draggedPos.x) + 200 });
+      }
+
+      // Check vertical alignment (same x)
+      if (Math.abs(nodePos.x - draggedPos.x) < ALIGNMENT_THRESHOLD) {
+        vertical.push({ x: nodePos.x, fromY: Math.min(nodePos.y, draggedPos.y) - 50, toY: Math.max(nodePos.y, draggedPos.y) + 100 });
+      }
+    });
+
+    setAlignmentGuides({ horizontal, vertical });
+  }, [ALIGNMENT_THRESHOLD]);
 
   // Complete connection on mouse up - returns connection info if valid
   const handleMouseUp = useCallback(() => {
+    // Clear alignment guides
+    setAlignmentGuides({ horizontal: [], vertical: [] });
+
     // Check if we completed a valid connection
     let completedConnection = null;
     if (isConnecting && connectionStart && connectionTarget) {
@@ -633,6 +720,10 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     // Node colors
     nodeColors,
     setNodeColor,
+    nodeIcons,
+    setNodeIcon,
+    nodeShapes,
+    setNodeShape,
     // Node sizes (resize)
     nodeSizes,
     getNodeSize,
@@ -660,6 +751,10 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     // Edge styles and context menu
     edgeStyles,
     setEdgeStyle,
+    edgeArrowTypes,
+    setEdgeArrowType,
+    edgePathTypes,
+    setEdgePathType,
     edgeContextMenu,
     handleEdgeContextMenu,
     closeEdgeContextMenu,
@@ -675,6 +770,9 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
     // Snap to grid
     snapToGrid,
     setSnapToGrid,
+    // Alignment guides
+    alignmentGuides,
+    updateAlignmentGuides,
     // Existing handlers
     handleCanvasMouseDown,
     handleNodeMouseDown,
@@ -777,11 +875,45 @@ const NODE_COLOR_PALETTE = [
   { name: 'Default', color: null },
 ];
 
+// Node shape options
+const NODE_SHAPE_OPTIONS = [
+  { name: 'Rectangle', shape: 'rectangle', icon: '▭' },
+  { name: 'Rounded', shape: 'rounded', icon: '▢' },
+  { name: 'Circle', shape: 'circle', icon: '●' },
+  { name: 'Diamond', shape: 'diamond', icon: '◆' },
+  { name: 'Hexagon', shape: 'hexagon', icon: '⬡' },
+  { name: 'Pill', shape: 'pill', icon: '💊' },
+];
+
+// Node icon options
+const NODE_ICON_OPTIONS = [
+  { name: 'None', icon: null },
+  { name: 'Server', icon: '🖥️' },
+  { name: 'Database', icon: '🗄️' },
+  { name: 'Cloud', icon: '☁️' },
+  { name: 'User', icon: '👤' },
+  { name: 'Settings', icon: '⚙️' },
+  { name: 'Lock', icon: '🔒' },
+  { name: 'Email', icon: '📧' },
+  { name: 'API', icon: '🔌' },
+  { name: 'File', icon: '📄' },
+  { name: 'Folder', icon: '📁' },
+  { name: 'Code', icon: '💻' },
+  { name: 'Chart', icon: '📊' },
+  { name: 'Bell', icon: '🔔' },
+  { name: 'Star', icon: '⭐' },
+  { name: 'Check', icon: '✅' },
+  { name: 'Warning', icon: '⚠️' },
+  { name: 'Error', icon: '❌' },
+  { name: 'Money', icon: '💰' },
+  { name: 'Clock', icon: '🕐' },
+];
+
 // ============================================
 // COLOR PICKER CONTEXT MENU
 // ============================================
 
-function ColorPickerMenu({ x, y, nodeId, onSelectColor, onClose, theme }) {
+function ColorPickerMenu({ x, y, nodeId, currentIcon, currentShape, onSelectColor, onSelectIcon, onSelectShape, onClose, theme }) {
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -837,6 +969,76 @@ function ColorPickerMenu({ x, y, nodeId, onSelectColor, onClose, theme }) {
           </button>
         ))}
       </div>
+      {/* Icon Selection */}
+      {onSelectIcon && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+          <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+            Node Icon
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, maxHeight: 120, overflowY: 'auto' }}>
+            {NODE_ICON_OPTIONS.map((opt) => {
+              const isSelected = currentIcon === opt.icon || (!currentIcon && !opt.icon);
+              return (
+                <button
+                  key={opt.name}
+                  onClick={() => onSelectIcon(nodeId, opt.icon)}
+                  title={opt.name}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 6,
+                    border: isSelected ? `2px solid ${COLORS.purple}` : `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+                    background: isSelected ? `${COLORS.purple}20` : 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: opt.icon ? '1rem' : '0.7rem',
+                    color: theme?.textMuted || '#666',
+                  }}
+                >
+                  {opt.icon || '×'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {/* Shape Selection */}
+      {onSelectShape && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+          <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+            Node Shape
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+            {NODE_SHAPE_OPTIONS.map((opt) => {
+              const isSelected = currentShape === opt.shape || (!currentShape && opt.shape === 'rounded');
+              return (
+                <button
+                  key={opt.shape}
+                  onClick={() => onSelectShape(nodeId, opt.shape)}
+                  title={opt.name}
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 6,
+                    border: isSelected ? `2px solid ${COLORS.purple}` : `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+                    background: isSelected ? `${COLORS.purple}20` : 'transparent',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 4,
+                    fontSize: '0.7rem',
+                    color: theme?.textPrimary || '#fff',
+                  }}
+                >
+                  <span style={{ fontSize: '0.9rem' }}>{opt.icon}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
         <button
           onClick={onClose}
@@ -869,11 +1071,20 @@ const EDGE_STYLE_OPTIONS = [
   { name: 'Solid', style: 'solid', icon: '━', dasharray: null, animated: false },
 ];
 
+// Arrow type options for edges
+const ARROW_TYPE_OPTIONS = [
+  { name: 'Triangle', type: 'triangle', icon: '▶' },
+  { name: 'Open', type: 'open', icon: '▷' },
+  { name: 'Diamond', type: 'diamond', icon: '◆' },
+  { name: 'Circle', type: 'circle', icon: '●' },
+  { name: 'None', type: 'none', icon: '—' },
+];
+
 // ============================================
 // EDGE STYLE CONTEXT MENU
 // ============================================
 
-function EdgeStyleMenu({ x, y, edgeId, currentStyle, onSelectStyle, onClose, theme }) {
+function EdgeStyleMenu({ x, y, edgeId, currentStyle, currentArrowType, currentPathType, onSelectStyle, onSelectArrowType, onSelectPathType, onClose, theme }) {
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -899,11 +1110,11 @@ function EdgeStyleMenu({ x, y, edgeId, currentStyle, onSelectStyle, onClose, the
         padding: 12,
         zIndex: 1000,
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-        minWidth: 140,
+        minWidth: 160,
       }}
     >
       <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
-        Connection Style
+        Line Style
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {EDGE_STYLE_OPTIONS.map((opt) => {
@@ -931,6 +1142,77 @@ function EdgeStyleMenu({ x, y, edgeId, currentStyle, onSelectStyle, onClose, the
             </button>
           );
         })}
+      </div>
+      {/* Arrow Type Selection */}
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+        <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+          Arrow Style
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {ARROW_TYPE_OPTIONS.map((opt) => {
+            const isSelected = currentArrowType === opt.type || (!currentArrowType && opt.type === 'triangle');
+            return (
+              <button
+                key={opt.type}
+                onClick={() => onSelectArrowType(edgeId, opt.type)}
+                title={opt.name}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  border: isSelected ? `2px solid ${COLORS.purple}` : `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+                  background: isSelected ? `${COLORS.purple}20` : 'transparent',
+                  cursor: 'pointer',
+                  color: theme?.textPrimary || '#fff',
+                  fontSize: '1rem',
+                }}
+              >
+                {opt.icon}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {/* Path Type Selection (Curved vs Straight) */}
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
+        <div style={{ color: theme?.textSecondary || '#888', fontSize: '0.75rem', marginBottom: 8, fontWeight: 600 }}>
+          Path Style
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[
+            { name: 'Curved', type: 'curved', icon: '⌒' },
+            { name: 'Straight', type: 'straight', icon: '—' },
+            { name: 'Step', type: 'step', icon: '⌐' },
+          ].map((opt) => {
+            const isSelected = currentPathType === opt.type || (!currentPathType && opt.type === 'curved');
+            return (
+              <button
+                key={opt.type}
+                onClick={() => onSelectPathType(edgeId, opt.type)}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: isSelected ? `2px solid ${COLORS.purple}` : `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}`,
+                  background: isSelected ? `${COLORS.purple}20` : 'transparent',
+                  cursor: 'pointer',
+                  color: theme?.textPrimary || '#fff',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <span style={{ fontSize: '1rem' }}>{opt.icon}</span>
+                <span>{opt.name}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme?.border || 'rgba(255,255,255,0.1)'}` }}>
         <button
@@ -2143,7 +2425,7 @@ const Parsers = {
 // ============================================
 
 // Mind Map with draggable nodes
-function MindMapDiagram({ data, theme = THEMES.dark }) {
+function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 100, y: 0 });
   const [collapsed, setCollapsed] = useState(new Set());
 
@@ -2174,41 +2456,226 @@ function MindMapDiagram({ data, theme = THEMES.dark }) {
     return `M ${sp.x + src.width + 5} ${sp.y} C ${(sp.x + src.width + tp.x) / 2} ${sp.y}, ${(sp.x + src.width + tp.x) / 2} ${tp.y}, ${tp.x - 5} ${tp.y}`;
   };
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const node = layout.nodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, layout.nodes, onLabelChange]);
+
+  // Handle keyboard shortcuts (Delete, Copy, Paste)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout.nodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout.nodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.nodes.map(n => ({ ...n, x: n.defaultX, y: n.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout.nodes, canvas]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
+  // Handle collapse toggle (single click on +/- button)
+  const handleCollapseToggle = useCallback((nodeId) => {
+    setCollapsed(p => { const n = new Set(p); n.has(nodeId) ? n.delete(nodeId) : n.add(nodeId); return n; });
+  }, []);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${30 * canvas.zoom}px ${30 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {layout.edges.map(e => { const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target); return src && tgt ? <path key={e.id} d={getBezier(src, tgt)} fill="none" stroke={e.color} strokeWidth={2.5} opacity={0.7} /> : null; })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="5,5" style={{ pointerEvents: 'none' }}
+              />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.nodes.map(node => {
             const pos = getPos(node);
+            const nodeColor = canvas.nodeColors[node.id] || node.color;
+            const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
+            const isEditing = canvas.editingNode === node.id;
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onClick={() => node.hasChildren && setCollapsed(p => { const n = new Set(p); n.has(node.id) ? n.delete(node.id) : n.add(node.id); return n; })} style={{ position: 'absolute', left: pos.x, top: pos.y - 19, width: node.width, height: 38, background: node.level === 0 ? node.color : `${node.color}18`, border: `2px solid ${node.color}`, borderRadius: node.level === 0 ? 19 : 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: canvas.dragging === node.id ? 'grabbing' : 'grab', boxShadow: canvas.dragging === node.id ? `0 0 20px ${node.color}60` : 'none', transition: canvas.dragging === node.id ? 'none' : 'box-shadow 0.2s' }}>
-                <span style={{ color: node.level === 0 ? '#fff' : theme.textPrimary, fontSize: node.level === 0 ? 14 : 13, fontWeight: node.level === 0 ? 700 : 500 }}>{node.label}</span>
-                {node.hasChildren && <div style={{ position: 'absolute', right: -28, width: 24, height: 24, borderRadius: '50%', background: node.color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16, fontWeight: 700 }}>{node.isCollapsed ? '+' : '−'}</div>}
+              <div
+                key={node.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
+                style={{
+                  position: 'absolute', left: pos.x, top: pos.y - 19, width: node.width, height: 38,
+                  background: node.level === 0 ? nodeColor : `${nodeColor}18`,
+                  border: `2px solid ${nodeColor}`,
+                  borderRadius: node.level === 0 ? 19 : 8,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  boxShadow: isDragging ? `0 0 20px ${nodeColor}60` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : 'none',
+                  transition: isDragging ? 'none' : 'box-shadow 0.2s'
+                }}
+              >
+                <EditableNodeLabel
+                  isEditing={isEditing}
+                  value={isEditing ? canvas.editValue : node.label}
+                  onChange={canvas.setEditValue}
+                  onFinish={handleLabelEditFinish}
+                  onCancel={canvas.cancelEditing}
+                  style={{ color: node.level === 0 ? '#fff' : theme.textPrimary, fontSize: node.level === 0 ? 14 : 13, fontWeight: node.level === 0 ? 700 : 500 }}
+                />
+                {node.hasChildren && (
+                  <div
+                    onClick={(e) => { e.stopPropagation(); handleCollapseToggle(node.id); }}
+                    style={{ position: 'absolute', right: -28, width: 24, height: 24, borderRadius: '50%', background: nodeColor, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    {node.isCollapsed ? '+' : '−'}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => {}} onReset={() => { canvas.resetView(); setCollapsed(new Set()); }} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => {}} onReset={() => { canvas.resetView(); setCollapsed(new Set()); }} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && canvas.clipboard.length > 0 && canvas.selectedNodes.size === 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(16,185,129,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.clipboard.length} in clipboard • ⌘V to paste
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
+          onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }
 
 // Architecture with draggable nodes
-function ArchitectureDiagram({ data, theme = THEMES.dark }) {
+function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 0, y: 30 });
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
   const getShape = (type) => { if (['database', 'cache', 'storage'].includes(type)) return 'cylinder'; if (['gateway', 'loadbalancer'].includes(type)) return 'hexagon'; return 'rect'; };
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const node = data.nodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, data.nodes, onLabelChange]);
+
+  // Handle keyboard shortcuts (Delete, Copy, Paste)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(data.nodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, data.nodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(data.nodes, canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, data.nodes, canvas]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="arch-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
@@ -2233,26 +2700,85 @@ function ArchitectureDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="5,5" style={{ pointerEvents: 'none' }}
+              />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {data.nodes.map(node => {
             const pos = getPos(node);
             const shape = getShape(node.type);
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: 75, background: `${node.color}20`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: canvas.dragging === node.id ? 'grabbing' : 'grab', boxShadow: canvas.dragging === node.id ? `0 0 25px ${node.color}50` : `0 4px 20px ${node.color}30`, transition: canvas.dragging === node.id ? 'none' : 'box-shadow 0.2s' };
+            const nodeColor = canvas.nodeColors[node.id] || node.color;
+            const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
+            const isEditing = canvas.editingNode === node.id;
+            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: 75, background: `${nodeColor}20`, border: `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 20px ${nodeColor}30`, transition: isDragging ? 'none' : 'box-shadow 0.2s' };
             if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = 85; }
             if (shape === 'hexagon') { style.clipPath = 'polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%)'; style.width = 145; }
-            return <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} style={style}><div style={{ fontSize: '1.5rem', marginBottom: 4 }}>{node.icon}</div><div style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}>{node.label}</div></div>;
+            return (
+              <div
+                key={node.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
+                style={style}
+              >
+                <div style={{ fontSize: '1.5rem', marginBottom: 4 }}>{canvas.nodeIcons[node.id] || node.icon}</div>
+                <EditableNodeLabel
+                  isEditing={isEditing}
+                  value={isEditing ? canvas.editValue : node.label}
+                  onChange={canvas.setEditValue}
+                  onFinish={handleLabelEditFinish}
+                  onCancel={canvas.cancelEditing}
+                  style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}
+                />
+              </div>
+            );
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && canvas.clipboard.length > 0 && canvas.selectedNodes.size === 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(16,185,129,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.clipboard.length} in clipboard • ⌘V to paste
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
+          onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }
 
 // User Journey with draggable nodes - supports both legacy and section-based formats
-function UserJourneyDiagram({ data, theme = THEMES.dark }) {
+function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   // Check if this is the new section-based format
   if (data?.format === 'sections') {
     return <JourneySectionDiagram data={data} theme={theme} />;
@@ -2275,9 +2801,64 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }, [nodes]);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const node = nodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, nodes, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(nodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, nodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(nodes, canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, nodes, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
 
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
@@ -2334,6 +2915,10 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
           </g>
         </svg>
 
@@ -2341,27 +2926,52 @@ function UserJourneyDiagram({ data, theme = THEMES.dark }) {
           {nodes.map(node => {
             const pos = getPos(node);
             const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
 
             if (node.shape === 'circle') {
               return (
-                <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                   <span style={{ fontSize: 24 }}>{node.icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                  {canvas.editingNode === node.id ? (
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }} />
+                  ) : (
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                  )}
                 </div>
               );
             }
 
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 20px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
                 <span style={{ fontSize: 22 }}>{node.icon}</span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                {canvas.editingNode === node.id ? (
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }} />
+                ) : (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.2))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
@@ -2984,6 +3594,70 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
     canvas.fitToView(contentBounds);
   }, [initNodes, edges, canvas, contentBounds]);
 
+  // Distribute selected nodes horizontally (evenly spaced)
+  const distributeHorizontally = useCallback(() => {
+    const selectedIds = Array.from(canvas.selectedNodes);
+    if (selectedIds.length < 3) return;
+
+    // Get current positions
+    const nodePositions = selectedIds.map(id => ({
+      id,
+      x: canvas.positions[id]?.x ?? initNodes.find(n => n.id === id)?.x ?? 0
+    }));
+
+    // Sort by x position
+    nodePositions.sort((a, b) => a.x - b.x);
+
+    // Calculate new positions
+    const minX = nodePositions[0].x;
+    const maxX = nodePositions[nodePositions.length - 1].x;
+    const spacing = (maxX - minX) / (nodePositions.length - 1);
+
+    const newPositions = { ...canvas.positions };
+    nodePositions.forEach((node, index) => {
+      const currentY = newPositions[node.id]?.y ?? initNodes.find(n => n.id === node.id)?.y ?? 0;
+      newPositions[node.id] = { x: minX + index * spacing, y: currentY };
+    });
+
+    canvas.setPositions(newPositions);
+  }, [canvas, initNodes]);
+
+  // Distribute selected nodes vertically (evenly spaced)
+  const distributeVertically = useCallback(() => {
+    const selectedIds = Array.from(canvas.selectedNodes);
+    if (selectedIds.length < 3) return;
+
+    // Get current positions
+    const nodePositions = selectedIds.map(id => ({
+      id,
+      y: canvas.positions[id]?.y ?? initNodes.find(n => n.id === id)?.y ?? 0
+    }));
+
+    // Sort by y position
+    nodePositions.sort((a, b) => a.y - b.y);
+
+    // Calculate new positions
+    const minY = nodePositions[0].y;
+    const maxY = nodePositions[nodePositions.length - 1].y;
+    const spacing = (maxY - minY) / (nodePositions.length - 1);
+
+    const newPositions = { ...canvas.positions };
+    nodePositions.forEach((node, index) => {
+      const currentX = newPositions[node.id]?.x ?? initNodes.find(n => n.id === node.id)?.x ?? 0;
+      newPositions[node.id] = { x: currentX, y: minY + index * spacing };
+    });
+
+    canvas.setPositions(newPositions);
+  }, [canvas, initNodes]);
+
+  // Update alignment guides when dragging
+  useEffect(() => {
+    if (canvas.dragging) {
+      const draggedPos = getPos({ id: canvas.dragging });
+      canvas.updateAlignmentGuides(canvas.dragging, draggedPos, initNodes, getPos);
+    }
+  }, [canvas.dragging, canvas.positions, initNodes, getPos, canvas.updateAlignmentGuides]);
+
   // Handle keyboard shortcuts (Delete, Copy, Paste)
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -3045,12 +3719,27 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
   // Helper to get edge style properties
   const getEdgeStyleProps = useCallback((edgeId) => {
     const style = canvas.edgeStyles[edgeId] || 'animated';
+    const arrowType = canvas.edgeArrowTypes[edgeId] || 'triangle';
     const opt = EDGE_STYLE_OPTIONS.find(o => o.style === style) || EDGE_STYLE_OPTIONS[0];
+
+    // Determine marker URL based on arrow type
+    let markerEnd = 'url(#flow-arr-triangle)';
+    if (arrowType === 'none') {
+      markerEnd = '';
+    } else if (arrowType === 'open') {
+      markerEnd = 'url(#flow-arr-open)';
+    } else if (arrowType === 'diamond') {
+      markerEnd = 'url(#flow-arr-diamond)';
+    } else if (arrowType === 'circle') {
+      markerEnd = 'url(#flow-arr-circle)';
+    }
+
     return {
       strokeDasharray: opt.dasharray,
       animation: opt.animated ? 'flowDash 1s linear infinite' : 'none',
+      markerEnd,
     };
-  }, [canvas.edgeStyles]);
+  }, [canvas.edgeStyles, canvas.edgeArrowTypes]);
 
   // Wrap mouse up to handle connection completion
   const handleMouseUpWithConnection = useCallback((e) => {
@@ -3071,7 +3760,18 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={handleMouseUpWithConnection} onMouseLeave={handleMouseUpWithConnection} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : canvas.isConnecting ? 'crosshair' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible' }}>
-          <defs><marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
+          <defs>
+            {/* Triangle arrow (filled) */}
+            <marker id="flow-arr-triangle" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
+            {/* Open arrow (outline only) */}
+            <marker id="flow-arr-open" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polyline points="0 0, 10 4, 0 8" fill="none" stroke={COLORS.purple} strokeWidth="2" /></marker>
+            {/* Diamond arrow */}
+            <marker id="flow-arr-diamond" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill={COLORS.purple} /></marker>
+            {/* Circle arrow */}
+            <marker id="flow-arr-circle" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><circle cx="5" cy="5" r="4" fill={COLORS.purple} /></marker>
+            {/* Default/backward compatibility */}
+            <marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {edges.map(e => {
               const src = initNodes.find(n => n.id === e.source), tgt = initNodes.find(n => n.id === e.target);
@@ -3081,10 +3781,26 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               const srcR = src.type === 'decision' ? 45 : 40, tgtR = tgt.type === 'decision' ? 45 : 40;
               const sx = sp.x + (dx / dist) * srcR, sy = sp.y + (dy / dist) * 35;
               const tx = tp.x - (dx / dist) * tgtR, ty = tp.y - (dy / dist) * 35;
-              // Curved path for horizontal branches
+              // Get path type (curved, straight, or step)
+              const pathType = canvas.edgePathTypes[e.id] || 'curved';
               const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
-              const curveOffset = Math.abs(dx) > 50 ? Math.sign(dy || 1) * 20 : 0;
-              const path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
+              const curveOffset = pathType === 'straight' ? 0 : (Math.abs(dx) > 50 ? Math.sign(dy || 1) * 20 : 0);
+              let path;
+              if (pathType === 'straight') {
+                path = `M ${sx} ${sy} L ${tx} ${ty}`;
+              } else if (pathType === 'step') {
+                // Orthogonal/step path with right angles
+                if (Math.abs(dx) > Math.abs(dy)) {
+                  // More horizontal - go right first, then up/down
+                  path = `M ${sx} ${sy} L ${midX} ${sy} L ${midX} ${ty} L ${tx} ${ty}`;
+                } else {
+                  // More vertical - go down first, then left/right
+                  path = `M ${sx} ${sy} L ${sx} ${midY} L ${tx} ${midY} L ${tx} ${ty}`;
+                }
+              } else {
+                // Curved (default)
+                path = `M ${sx} ${sy} Q ${midX} ${midY + curveOffset} ${tx} ${ty}`;
+              }
               const isEditingThisEdge = canvas.editingEdge === e.id;
               const labelText = isEditingThisEdge ? canvas.edgeEditValue : (e.label || '');
               const edgeStyleProps = getEdgeStyleProps(e.id);
@@ -3093,7 +3809,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                   {/* Invisible wider path for easier clicking */}
                   <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); canvas.handleEdgeContextMenu(ev, e.id); }} />
                   <path d={path} fill="none" stroke="rgba(124,58,237,0.2)" strokeWidth={4} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd="url(#flow-arr)" opacity={0.8} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd={edgeStyleProps.markerEnd} opacity={0.8} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
                   {/* Edge label or edit input */}
                   {(labelText || isEditingThisEdge) && (
                     <g style={{ cursor: 'pointer' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }}>
@@ -3148,6 +3864,35 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                 />
               </g>
             )}
+            {/* Alignment guides */}
+            {canvas.alignmentGuides.horizontal.map((guide, i) => (
+              <line
+                key={`h-${i}`}
+                x1={guide.fromX}
+                y1={guide.y}
+                x2={guide.toX}
+                y2={guide.y}
+                stroke={COLORS.cyan}
+                strokeWidth={1}
+                strokeDasharray="4,4"
+                opacity={0.8}
+                style={{ pointerEvents: 'none' }}
+              />
+            ))}
+            {canvas.alignmentGuides.vertical.map((guide, i) => (
+              <line
+                key={`v-${i}`}
+                x1={guide.x}
+                y1={guide.fromY}
+                x2={guide.x}
+                y2={guide.toY}
+                stroke={COLORS.cyan}
+                strokeWidth={1}
+                strokeDasharray="4,4"
+                opacity={0.8}
+                style={{ pointerEvents: 'none' }}
+              />
+            ))}
           </g>
         </svg>
         {/* Edge label edit input (positioned in screen space) */}
@@ -3185,12 +3930,25 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
-            const isDiamond = node.type === 'decision';
             const isResizing = canvas.resizing?.nodeId === node.id;
+            // Get custom shape (or determine from node type)
+            const customShape = canvas.nodeShapes[node.id];
+            const nodeShape = customShape || (node.type === 'decision' ? 'diamond' : (['start', 'end'].includes(node.type) ? 'pill' : 'rounded'));
+            const isDiamond = nodeShape === 'diamond';
             // Get custom size or default
             const nodeSize = canvas.getNodeSize(node.id);
-            const nodeWidth = isDiamond ? 70 : nodeSize.width;
-            const nodeHeight = isDiamond ? 70 : nodeSize.height;
+            const isCircle = nodeShape === 'circle';
+            const circleSize = Math.max(nodeSize.width, nodeSize.height);
+            const nodeWidth = isDiamond ? 70 : (isCircle ? circleSize : nodeSize.width);
+            const nodeHeight = isDiamond ? 70 : (isCircle ? circleSize : nodeSize.height);
+            // Compute border radius based on shape
+            let borderRadius = 12;
+            let clipPath = undefined;
+            if (nodeShape === 'rectangle') borderRadius = 0;
+            else if (nodeShape === 'rounded') borderRadius = 12;
+            else if (nodeShape === 'circle') borderRadius = '50%';
+            else if (nodeShape === 'pill') borderRadius = nodeHeight / 2;
+            else if (nodeShape === 'hexagon') clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
             let style = {
               position: 'absolute',
               left: pos.x - nodeWidth / 2,
@@ -3198,13 +3956,14 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               width: nodeWidth,
               height: nodeHeight,
               background: `${nodeColor}20`, border: `2px solid ${nodeColor}`,
-              borderRadius: ['start', 'end'].includes(node.type) ? 30 : 12,
+              borderRadius: borderRadius,
+              clipPath: clipPath,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               cursor: isDragging ? 'grabbing' : isResizing ? 'nwse-resize' : 'grab',
               boxShadow: isDragging ? `0 0 25px ${nodeColor}50` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 15px ${nodeColor}20`,
               transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s', touchAction: 'none'
             };
-            if (isDiamond) { style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; }
+            if (isDiamond) { style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; style.clipPath = undefined; }
             const isConnectionTarget = canvas.isConnecting && canvas.connectionTarget === node.id;
             const canBeTarget = canvas.isConnecting && canvas.connectionStart?.nodeId !== node.id;
             // Calculate port positions (right side for outgoing, left for incoming)
@@ -3228,7 +3987,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                 }}
               >
                 <div style={{ transform: isDiamond ? 'rotate(-45deg)' : 'none', textAlign: 'center', width: '100%', padding: '0 8px' }}>
-                  {s.icon && <div style={{ fontSize: '1.2rem' }}>{s.icon}</div>}
+                  {(canvas.nodeIcons[node.id] || s.icon) && <div style={{ fontSize: '1.2rem' }}>{canvas.nodeIcons[node.id] || s.icon}</div>}
                   <EditableNodeLabel
                     isEditing={isEditing}
                     value={isEditing ? canvas.editValue : node.label}
@@ -3347,6 +4106,236 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} onAutoLayout={applyAutoLayout} />
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', alignItems: 'center', gap: 8, zIndex: 100 }}>
+          <div style={{ background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem' }}>
+            {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+          </div>
+          {canvas.selectedNodes.size >= 3 && (
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                onClick={distributeHorizontally}
+                title="Distribute horizontally"
+                style={{
+                  padding: '4px 8px',
+                  background: 'rgba(0,0,0,0.8)',
+                  border: '1px solid rgba(124,58,237,0.5)',
+                  borderRadius: 6,
+                  color: '#fff',
+                  fontSize: '0.7rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+              >
+                <span style={{ transform: 'rotate(90deg)', fontSize: '0.9rem' }}>⋮</span> H
+              </button>
+              <button
+                onClick={distributeVertically}
+                title="Distribute vertically"
+                style={{
+                  padding: '4px 8px',
+                  background: 'rgba(0,0,0,0.8)',
+                  border: '1px solid rgba(124,58,237,0.5)',
+                  borderRadius: 6,
+                  color: '#fff',
+                  fontSize: '0.7rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+              >
+                <span style={{ fontSize: '0.9rem' }}>⋮</span> V
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && canvas.clipboard.length > 0 && canvas.selectedNodes.size === 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(16,185,129,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.clipboard.length} in clipboard • ⌘V to paste
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
+          onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
+      {/* Edge style menu */}
+      {canvas.edgeContextMenu && (
+        <EdgeStyleMenu
+          x={canvas.edgeContextMenu.x}
+          y={canvas.edgeContextMenu.y}
+          edgeId={canvas.edgeContextMenu.edgeId}
+          currentStyle={canvas.edgeStyles[canvas.edgeContextMenu.edgeId]}
+          currentArrowType={canvas.edgeArrowTypes[canvas.edgeContextMenu.edgeId]}
+          currentPathType={canvas.edgePathTypes[canvas.edgeContextMenu.edgeId]}
+          onSelectStyle={canvas.setEdgeStyle}
+          onSelectArrowType={canvas.setEdgeArrowType}
+          onSelectPathType={canvas.setEdgePathType}
+          onClose={canvas.closeEdgeContextMenu}
+          theme={theme}
+        />
+      )}
+    </div>
+  );
+}
+
+// ERD with draggable tables
+function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+  const canvas = useInteractiveCanvas();
+  const layout = useMemo(() => {
+    const cols = Math.min(3, Math.ceil(Math.sqrt(tables.length)));
+    return tables.map((t, i) => ({ ...t, id: t.name, label: t.name, defaultX: (i % cols) * 280 + 60, defaultY: Math.floor(i / cols) * 250 + 60, width: 230 }));
+  }, [tables]);
+  const getPos = (t) => canvas.getNodePosition(t.name, t.defaultX, t.defaultY);
+
+  const contentBounds = useMemo(() => {
+    if (!layout || layout.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.map(t => t.defaultX);
+    const ys = layout.map(t => t.defaultY);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 300 };
+  }, [layout]);
+
+  // Handle label edit complete (for table names)
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const table = layout.find(t => t.name === result.nodeId);
+      if (table && table.name !== result.newValue) {
+        onLabelChange(result.nodeId, table.name, result.newValue);
+      }
+    }
+  }, [canvas, layout, onLabelChange]);
+
+  // Handle keyboard shortcuts (Delete, Copy, Paste)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.map(t => ({ ...t, x: t.defaultX, y: t.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout, canvas]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs><marker id="erd-crow" markerWidth="16" markerHeight="12" refX="14" refY="6" orient="auto"><path d="M 0 6 L 10 0 M 0 6 L 10 6 M 0 6 L 10 12" stroke={COLORS.blue} strokeWidth="2" fill="none" /></marker></defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {layout.flatMap(t => t.fields?.filter(f => f.fk && f.references).map((f, fi) => {
+              const tgt = layout.find(tt => tt.name === f.references);
+              if (!tgt) return null;
+              const sp = getPos(t), tp = getPos(tgt);
+              const sy = sp.y + 44 + fi * 30 + 15, sx = sp.x + t.width, tx = tp.x, ty = tp.y + 22;
+              return <path key={`${t.name}-${f.name}`} d={`M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`} fill="none" stroke={COLORS.blue} strokeWidth={2} markerEnd="url(#erd-crow)" opacity={0.7} />;
+            }) || [])}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="5,5" style={{ pointerEvents: 'none' }}
+              />
+            )}
+          </g>
+        </svg>
+        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {layout.map(t => {
+            const pos = getPos(t);
+            const isDragging = canvas.dragging === t.name;
+            const isSelected = canvas.selectedNodes.has(t.name);
+            const isEditing = canvas.editingNode === t.name;
+            const tableColor = canvas.nodeColors[t.name] || COLORS.orange;
+            return (
+              <div
+                key={t.name}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, t.name, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, t.name, t.name)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, t.name)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, t.name, pos.x, pos.y)}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: theme.surface, border: `2px solid ${tableColor}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${tableColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : '0 4px 20px rgba(0,0,0,0.3)', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+              >
+                <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${tableColor}, ${tableColor}dd)` }}>
+                  <span style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    📊
+                    <EditableNodeLabel
+                      isEditing={isEditing}
+                      value={isEditing ? canvas.editValue : t.name}
+                      onChange={canvas.setEditValue}
+                      onFinish={handleLabelEditFinish}
+                      onCancel={canvas.cancelEditing}
+                      style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}
+                    />
+                  </span>
+                </div>
+                <div style={{ padding: '8px 0' }}>
+                  {t.fields?.map((f, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '7px 16px', borderBottom: i < t.fields.length - 1 ? `1px solid ${theme.border}` : 'none', gap: 10 }}>
+                      <span style={{ width: 20, fontSize: '0.8rem' }}>{f.key ? '🔑' : f.fk ? '🔗' : ''}</span>
+                      <span style={{ flex: 1, color: f.key ? tableColor : f.fk ? COLORS.blue : theme.textPrimary, fontSize: '0.85rem', fontWeight: f.key ? 600 : 400 }}>{f.name}</span>
+                      <span style={{ color: theme.textMuted, fontSize: '0.75rem', fontFamily: 'monospace' }}>{f.type}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
           {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
         </div>
@@ -3363,87 +4352,21 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
           x={canvas.contextMenu.x}
           y={canvas.contextMenu.y}
           nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
           onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
           onClose={canvas.closeContextMenu}
           theme={theme}
         />
       )}
-      {/* Edge style menu */}
-      {canvas.edgeContextMenu && (
-        <EdgeStyleMenu
-          x={canvas.edgeContextMenu.x}
-          y={canvas.edgeContextMenu.y}
-          edgeId={canvas.edgeContextMenu.edgeId}
-          currentStyle={canvas.edgeStyles[canvas.edgeContextMenu.edgeId]}
-          onSelectStyle={canvas.setEdgeStyle}
-          onClose={canvas.closeEdgeContextMenu}
-          theme={theme}
-        />
-      )}
-    </div>
-  );
-}
-
-// ERD with draggable tables
-function ERDDiagram({ tables, theme = THEMES.dark }) {
-  const canvas = useInteractiveCanvas();
-  const layout = useMemo(() => {
-    const cols = Math.min(3, Math.ceil(Math.sqrt(tables.length)));
-    return tables.map((t, i) => ({ ...t, defaultX: (i % cols) * 280 + 60, defaultY: Math.floor(i / cols) * 250 + 60, width: 230 }));
-  }, [tables]);
-  const getPos = (t) => canvas.getNodePosition(t.name, t.defaultX, t.defaultY);
-
-  const contentBounds = useMemo(() => {
-    if (!layout || layout.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
-    const xs = layout.map(t => t.defaultX);
-    const ys = layout.map(t => t.defaultY);
-    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys) - Math.min(...ys) + 300 };
-  }, [layout]);
-
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
-        <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
-        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="erd-crow" markerWidth="16" markerHeight="12" refX="14" refY="6" orient="auto"><path d="M 0 6 L 10 0 M 0 6 L 10 6 M 0 6 L 10 12" stroke={COLORS.blue} strokeWidth="2" fill="none" /></marker></defs>
-          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
-            {layout.flatMap(t => t.fields?.filter(f => f.fk && f.references).map((f, fi) => {
-              const tgt = layout.find(tt => tt.name === f.references);
-              if (!tgt) return null;
-              const sp = getPos(t), tp = getPos(tgt);
-              const sy = sp.y + 44 + fi * 30 + 15, sx = sp.x + t.width, tx = tp.x, ty = tp.y + 22;
-              return <path key={`${t.name}-${f.name}`} d={`M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`} fill="none" stroke={COLORS.blue} strokeWidth={2} markerEnd="url(#erd-crow)" opacity={0.7} />;
-            }) || [])}
-          </g>
-        </svg>
-        <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
-          {layout.map(t => {
-            const pos = getPos(t);
-            const isDragging = canvas.dragging === t.name;
-            return (
-              <div key={t.name} onMouseDown={(e) => canvas.handleNodeMouseDown(e, t.name, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, t.name, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: t.width, background: theme.surface, border: `2px solid ${COLORS.orange}`, borderRadius: 12, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.orange}40` : '0 4px 20px rgba(0,0,0,0.3)', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
-                <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${COLORS.orange}, ${COLORS.amber}dd)` }}><span style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>📊 {t.name}</span></div>
-                <div style={{ padding: '8px 0' }}>
-                  {t.fields?.map((f, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '7px 16px', borderBottom: i < t.fields.length - 1 ? `1px solid ${theme.border}` : 'none', gap: 10 }}>
-                      <span style={{ width: 20, fontSize: '0.8rem' }}>{f.key ? '🔑' : f.fk ? '🔗' : ''}</span>
-                      <span style={{ flex: 1, color: f.key ? COLORS.orange : f.fk ? COLORS.blue : theme.textPrimary, fontSize: '0.85rem', fontWeight: f.key ? 600 : 400 }}>{f.name}</span>
-                      <span style={{ color: theme.textMuted, fontSize: '0.75rem', fontFamily: 'monospace' }}>{f.type}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
     </div>
   );
 }
 
 // Network with draggable devices
-function NetworkDiagram({ data, theme = THEMES.dark }) {
+function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas();
   const icons = { router: '📡', switch: '🔀', firewall: '🛡️', server: '🖥️', computer: '💻', cloud: '☁️', hub: '🔌' };
   const layout = useMemo(() => {
@@ -3459,9 +4382,64 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
     return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 200, height: Math.max(...ys) - Math.min(...ys) + 200 };
   }, [layout]);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const device = layout.devices.find(d => d.id === result.nodeId);
+      if (device && device.label !== result.newValue) {
+        onLabelChange(result.nodeId, device.label, result.newValue);
+      }
+    }
+  }, [canvas, layout.devices, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout.devices);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout.devices, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.devices.map(d => ({ ...d, x: d.defaultX, y: d.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout.devices, canvas]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -3471,34 +4449,88 @@ function NetworkDiagram({ data, theme = THEMES.dark }) {
               const sp = getPos(src), tp = getPos(tgt);
               return <g key={conn.id}><line x1={sp.x + 65} y1={sp.y + 55} x2={tp.x + 65} y2={tp.y + 55} stroke={COLORS.blue} strokeWidth={2} strokeDasharray="6,4" opacity={0.7} />{conn.protocol && <><rect x={(sp.x + tp.x) / 2 + 65 - 28} y={(sp.y + tp.y) / 2 + 55 - 10} width={56} height={18} rx={4} fill="rgba(0,0,0,0.8)" /><text x={(sp.x + tp.x) / 2 + 65} y={(sp.y + tp.y) / 2 + 55 + 3} textAnchor="middle" fill={COLORS.blue} fontSize={10}>{conn.protocol}</text></>}</g>;
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="5,5" style={{ pointerEvents: 'none' }}
+              />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.devices.map(device => {
             const pos = getPos(device);
             const isDragging = canvas.dragging === device.id;
+            const isSelected = canvas.selectedNodes.has(device.id);
+            const isEditing = canvas.editingNode === device.id;
+            const deviceColor = canvas.nodeColors[device.id] || COLORS.blue;
             return (
-              <div key={device.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, device.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, device.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: theme.surface, border: `2px solid ${COLORS.blue}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.blue}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
-                <div style={{ fontSize: '2.5rem', marginBottom: 6 }}>{icons[device.type] || '📦'}</div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary }}>{device.label}</div>
+              <div
+                key={device.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, device.id, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, device.id, device.label)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, device.id)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, device.id, pos.x, pos.y)}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: 130, background: theme.surface, border: `2px solid ${deviceColor}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${deviceColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+              >
+                <div style={{ fontSize: '2.5rem', marginBottom: 6 }}>{canvas.nodeIcons[device.id] || icons[device.type] || '📦'}</div>
+                <EditableNodeLabel
+                  isEditing={isEditing}
+                  value={isEditing ? canvas.editValue : device.label}
+                  onChange={canvas.setEditValue}
+                  onFinish={handleLabelEditFinish}
+                  onCancel={canvas.cancelEditing}
+                  style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary }}
+                />
                 {device.ip && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, fontFamily: 'monospace', marginTop: 4 }}>{device.ip}</div>}
               </div>
             );
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && canvas.clipboard.length > 0 && canvas.selectedNodes.size === 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(16,185,129,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.clipboard.length} in clipboard • ⌘V to paste
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
+          onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }
 
 // Class Diagram with draggable classes
-function ClassDiagram({ data, theme = THEMES.dark }) {
+function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas();
   const { classes = [], relationships = [] } = data;
   const layout = useMemo(() => {
     const cols = Math.min(3, Math.ceil(Math.sqrt(classes.length)));
-    return classes.map((c, i) => ({ ...c, defaultX: 80 + (i % cols) * 300, defaultY: 80 + Math.floor(i / cols) * 220, width: 230 }));
+    return classes.map((c, i) => ({ ...c, label: c.name, defaultX: 80 + (i % cols) * 300, defaultY: 80 + Math.floor(i / cols) * 220, width: 230 }));
   }, [classes]);
   const getPos = (c) => canvas.getNodePosition(c.id, c.defaultX, c.defaultY);
 
@@ -3517,10 +4549,65 @@ function ClassDiagram({ data, theme = THEMES.dark }) {
     return headerH + propsH + methodsH;
   };
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue && onLabelChange) {
+      const cls = layout.find(c => c.id === result.nodeId);
+      if (cls && cls.name !== result.newValue) {
+        onLabelChange(result.nodeId, cls.name, result.newValue);
+      }
+    }
+  }, [canvas, layout, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.map(c => ({ ...c, x: c.defaultX, y: c.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout, canvas]);
+
+  // Click on canvas to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs>
@@ -3555,15 +4642,44 @@ function ClassDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect
+                x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)}
+                y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)}
+                width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)}
+                height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)}
+                fill="rgba(124,58,237,0.1)" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="5,5" style={{ pointerEvents: 'none' }}
+              />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.map(cls => {
             const pos = getPos(cls);
             const isDragging = canvas.dragging === cls.id;
+            const isSelected = canvas.selectedNodes.has(cls.id);
+            const isEditing = canvas.editingNode === cls.id;
+            const classColor = canvas.nodeColors[cls.id] || COLORS.purple;
             return (
-              <div key={cls.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: cls.width, background: theme.surface, border: `2px solid ${COLORS.purple}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${COLORS.purple}40` : `0 4px 20px ${COLORS.purple}15`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
-                <div style={{ padding: '10px 14px', background: `${COLORS.purple}30`, borderBottom: `1px solid ${COLORS.purple}` }}><span style={{ color: theme.textPrimary, fontWeight: 700 }}>{cls.name}</span></div>
+              <div
+                key={cls.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, cls.id, pos.x, pos.y)}
+                onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, cls.id, cls.name)}
+                onContextMenu={(e) => canvas.handleNodeContextMenu(e, cls.id)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, cls.id, pos.x, pos.y)}
+                style={{ position: 'absolute', left: pos.x, top: pos.y, width: cls.width, background: theme.surface, border: `2px solid ${classColor}`, borderRadius: 8, overflow: 'hidden', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${classColor}40` : isSelected ? `0 0 0 3px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.3)` : `0 4px 20px ${classColor}15`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}
+              >
+                <div style={{ padding: '10px 14px', background: `${classColor}30`, borderBottom: `1px solid ${classColor}` }}>
+                  <EditableNodeLabel
+                    isEditing={isEditing}
+                    value={isEditing ? canvas.editValue : cls.name}
+                    onChange={canvas.setEditValue}
+                    onFinish={handleLabelEditFinish}
+                    onCancel={canvas.cancelEditing}
+                    style={{ color: theme.textPrimary, fontWeight: 700 }}
+                  />
+                </div>
                 <div style={{ padding: '8px 14px', borderBottom: `1px solid ${theme.border}` }}>
                   {cls.properties.map((p, i) => <div key={i} style={{ fontSize: '0.8rem', color: theme.textSecondary }}><span style={{ color: COLORS.orange }}>{p.visibility}</span> {p.name}: {p.type}</div>)}
                   {cls.properties.length === 0 && <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>No properties</div>}
@@ -3577,13 +4693,34 @@ function ClassDiagram({ data, theme = THEMES.dark }) {
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
+          {canvas.selectedNodes.size} selected • ⌘C copy • ⌘V paste • Del remove
+        </div>
+      )}
+      {/* Context menu */}
+      {canvas.contextMenu && (
+        <ColorPickerMenu
+          x={canvas.contextMenu.x}
+          y={canvas.contextMenu.y}
+          nodeId={canvas.contextMenu.nodeId}
+          currentIcon={canvas.nodeIcons[canvas.contextMenu.nodeId]}
+          currentShape={canvas.nodeShapes[canvas.contextMenu.nodeId]}
+          onSelectColor={canvas.setNodeColor}
+          onSelectIcon={canvas.setNodeIcon}
+          onSelectShape={canvas.setNodeShape}
+          onClose={canvas.closeContextMenu}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }
 
 // Org Chart with draggable nodes
-function OrgChartDiagram({ data, theme = THEMES.dark }) {
+function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 0, y: 50 });
   const layout = useMemo(() => {
     const { nodes, edges } = data;
@@ -3608,6 +4745,61 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
   }, [data]);
   const getPos = (n) => canvas.getNodePosition(n.id, n.defaultX, n.defaultY);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const node = layout.nodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, layout.nodes, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout.nodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout.nodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.nodes.map(n => ({ ...n, x: n.defaultX, y: n.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout.nodes, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   const contentBounds = useMemo(() => {
     if (!layout.nodes || layout.nodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = layout.nodes.map(n => n.defaultX);
@@ -3617,7 +4809,7 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -3628,22 +4820,47 @@ function OrgChartDiagram({ data, theme = THEMES.dark }) {
               const sx = sp.x + 80, sy = sp.y + 70, tx = tp.x + 80, ty = tp.y, my = (sy + ty) / 2;
               return <path key={e.id} d={`M ${sx} ${sy} L ${sx} ${my} L ${tx} ${my} L ${tx} ${ty}`} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" opacity={0.6} />;
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.nodes.map(node => {
             const pos = getPos(node);
             const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
             return (
-              <div key={node.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: `${node.color}15`, border: `2px solid ${node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
-                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div>
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: `${node.color}15`, border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                {canvas.editingNode === node.id ? (
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }} />
+                ) : (
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div>
+                )}
                 {node.title && <div style={{ fontSize: '0.75rem', color: node.color, marginTop: 4 }}>{node.title}</div>}
               </div>
             );
           })}
         </div>
       </div>
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
@@ -3878,7 +5095,7 @@ function QuadrantDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
-function DeploymentDiagram({ data, theme = THEMES.dark }) {
+function DeploymentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 30, y: 30 });
   const typeStyles = { cloud: { color: COLORS.sky, icon: '☁️' }, cluster: { color: COLORS.teal, icon: '🌐' }, container: { color: COLORS.cyan, icon: '📦' }, database: { color: COLORS.green, icon: '🗄️' }, storage: { color: COLORS.emerald, icon: '💾' }, device: { color: COLORS.pink, icon: '📱' }, server: { color: COLORS.violet, icon: '🖧' }, component: { color: COLORS.purple, icon: '⚙️' } };
   const layout = useMemo(() => {
@@ -3888,7 +5105,7 @@ function DeploymentDiagram({ data, theme = THEMES.dark }) {
     const positionNode = (node, x, y, level) => {
       const style = typeStyles[node.type] || typeStyles.component;
       const children = getChildren(node.id), h = getHeight(node.id);
-      positioned.push({ ...node, x, y, width: 220, height: h, level, ...style, hasChildren: children.length > 0 });
+      positioned.push({ ...node, defaultX: x, defaultY: y, width: 220, height: h, level, ...style, hasChildren: children.length > 0 });
       let cy = y + 55;
       children.forEach(child => { positionNode(child, x + 20, cy, level + 1); cy += getHeight(child.id) + 15; });
     };
@@ -3897,24 +5114,121 @@ function DeploymentDiagram({ data, theme = THEMES.dark }) {
     roots.forEach(root => { positionNode(root, rx, 40, 0); rx += 280; });
     return { nodes: positioned.sort((a, b) => a.level - b.level) };
   }, [data]);
+  const getPos = (n) => canvas.getNodePosition(n.id, n.defaultX, n.defaultY);
+
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const node = layout.nodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, layout.nodes, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout.nodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout.nodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.nodes.map(n => ({ ...n, x: n.defaultX, y: n.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout.nodes, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
+  const contentBounds = useMemo(() => {
+    if (!layout.nodes || layout.nodes.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
+    const xs = layout.nodes.map(n => n.defaultX);
+    const ys = layout.nodes.map(n => n.defaultY);
+    const heights = layout.nodes.map(n => n.height || 70);
+    return { x: Math.min(...xs) - 60, y: Math.min(...ys) - 60, width: Math.max(...xs) - Math.min(...xs) + 300, height: Math.max(...ys.map((y, i) => y + heights[i])) - Math.min(...ys) + 120 };
+  }, [layout]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : 'grab' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
+          </g>
+        </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
-          {layout.nodes.map(node => (
-            <div key={node.id} style={{ position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height, background: `${node.color}10`, border: `2px ${node.level === 0 ? 'solid' : 'dashed'} ${node.color}`, borderRadius: 12, boxSizing: 'border-box' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: node.hasChildren ? `1px solid ${node.color}30` : 'none' }}>
-                <span style={{ fontSize: '1.3rem' }}>{node.icon}</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</span>
-                <span style={{ fontSize: '0.6rem', color: node.color, marginLeft: 'auto', background: `${node.color}20`, padding: '3px 8px', borderRadius: 4 }}>«{node.type}»</span>
+          {layout.nodes.map(node => {
+            const pos = getPos(node);
+            const isDragging = canvas.dragging === node.id;
+            const isSelected = canvas.selectedNodes.has(node.id);
+            return (
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: node.width, height: node.height, background: `${node.color}10`, border: `2px ${node.level === 0 ? 'solid' : 'dashed'} ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, boxSizing: 'border-box', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${node.color}40` : 'none', transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: node.hasChildren ? `1px solid ${node.color}30` : 'none' }}>
+                  <span style={{ fontSize: '1.3rem' }}>{node.icon}</span>
+                  {canvas.editingNode === node.id ? (
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }} />
+                  ) : (
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</span>
+                  )}
+                  <span style={{ fontSize: '0.6rem', color: node.color, marginLeft: 'auto', background: `${node.color}20`, padding: '3px 8px', borderRadius: 4 }}>«{node.type}»</span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
@@ -4374,7 +5688,7 @@ function WireframeDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Component Diagram with connections
-function ComponentDiagram({ data, theme = THEMES.dark }) {
+function ComponentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { components = [], connections = [] } = data;
 
@@ -4401,6 +5715,61 @@ function ComponentDiagram({ data, theme = THEMES.dark }) {
 
   const getPos = (comp) => canvas.getNodePosition(comp.id, comp.defaultX, comp.defaultY);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const comp = layout.find(c => c.id === result.nodeId);
+      if (comp && comp.label !== result.newValue) {
+        onLabelChange(result.nodeId, comp.label, result.newValue);
+      }
+    }
+  }, [canvas, layout, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.map(c => ({ ...c, x: c.defaultX, y: c.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   const contentBounds = useMemo(() => {
     if (!layout.length) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = layout.map(c => c.defaultX);
@@ -4411,7 +5780,7 @@ function ComponentDiagram({ data, theme = THEMES.dark }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="comp-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
@@ -4432,28 +5801,53 @@ function ComponentDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.map(comp => {
             const pos = getPos(comp);
             const isDragging = canvas.dragging === comp.id;
+            const isSelected = canvas.selectedNodes.has(comp.id);
             return (
-              <div key={comp.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, comp.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, comp.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 75, top: pos.y - 50, width: 150, height: 100, background: `${comp.style.color}15`, border: `2px solid ${comp.style.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${comp.style.color}50` : `0 4px 20px ${comp.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={comp.id} onClick={(e) => canvas.handleNodeClick(e, comp.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, comp.id, comp.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, comp.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, comp.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, comp.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 75, top: pos.y - 50, width: 150, height: 100, background: `${comp.style.color}15`, border: `2px solid ${isSelected ? COLORS.blue : comp.style.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${comp.style.color}50` : `0 4px 20px ${comp.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>{comp.style.icon}</div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center', padding: '0 8px' }}>{comp.label}</div>
+                {canvas.editingNode === comp.id ? (
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }} />
+                ) : (
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center', padding: '0 8px' }}>{comp.label}</div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
 
 // C4 Diagram with relationships
-function C4Diagram({ data, theme = THEMES.dark }) {
+function C4Diagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { elements = [], relationships = [] } = data;
 
@@ -4480,6 +5874,61 @@ function C4Diagram({ data, theme = THEMES.dark }) {
 
   const getPos = (el) => canvas.getNodePosition(el.id, el.defaultX, el.defaultY);
 
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const el = layout.find(e => e.id === result.nodeId);
+      if (el && el.label !== result.newValue) {
+        onLabelChange(result.nodeId, el.label, result.newValue);
+      }
+    }
+  }, [canvas, layout, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(layout);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, layout, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(layout.map(el => ({ ...el, x: el.defaultX, y: el.defaultY })), canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, layout, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   const contentBounds = useMemo(() => {
     if (!layout.length) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = layout.map(e => e.defaultX);
@@ -4490,7 +5939,7 @@ function C4Diagram({ data, theme = THEMES.dark }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <style>{`@keyframes flowDash { to { stroke-dashoffset: -20; } }`}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs><marker id="c4-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.cyan} /></marker></defs>
@@ -4516,24 +5965,49 @@ function C4Diagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
           {layout.map(el => {
             const pos = getPos(el);
             const isDragging = canvas.dragging === el.id;
+            const isSelected = canvas.selectedNodes.has(el.id);
             const isPerson = el.style.shape === 'person';
             return (
-              <div key={el.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 85, top: pos.y - 60, width: 170, height: 120, background: `${el.style.color}15`, border: `2px solid ${el.style.color}`, borderRadius: isPerson ? '50% 50% 12px 12px' : el.style.shape === 'cylinder' ? '50% / 15%' : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 0 30px ${el.style.color}50` : `0 4px 20px ${el.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={el.id} onClick={(e) => canvas.handleNodeClick(e, el.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, el.id, el.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, el.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 85, top: pos.y - 60, width: 170, height: 120, background: `${el.style.color}15`, border: `2px solid ${isSelected ? COLORS.blue : el.style.color}`, borderRadius: isPerson ? '50% 50% 12px 12px' : el.style.shape === 'cylinder' ? '50% / 15%' : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${el.style.color}50` : `0 4px 20px ${el.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 6 }}>{el.style.icon}</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
+                {canvas.editingNode === el.id ? (
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }} />
+                ) : (
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
+                )}
                 {el.description && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 4 }}>{el.description}</div>}
               </div>
             );
           })}
         </div>
       </div>
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
@@ -4619,7 +6093,7 @@ function RequirementDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Use Case Diagram with actors, ovals, and connections
-function UseCaseDiagram({ data, theme = THEMES.dark }) {
+function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { actors = [], useCases = [], relationships = [] } = data;
 
@@ -4724,13 +6198,71 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }, [actorPositions, useCasePositions]);
 
+  // Combine all nodes for selection and interaction
+  const allNodes = useMemo(() => [...actorPositions, ...useCasePositions], [actorPositions, useCasePositions]);
+
+  // Handle label edit complete
+  const handleLabelEditFinish = useCallback(() => {
+    const result = canvas.finishEditing();
+    if (result.nodeId && result.newValue !== undefined && onLabelChange) {
+      const node = allNodes.find(n => n.id === result.nodeId);
+      if (node && node.label !== result.newValue) {
+        onLabelChange(result.nodeId, node.label, result.newValue);
+      }
+    }
+  }, [canvas, allNodes, onLabelChange]);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      const metaKey = isMac ? e.metaKey : e.ctrlKey;
+      if (canvas.editingNode) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && canvas.selectedNodes.size > 0 && onDeleteNodes) {
+        e.preventDefault();
+        onDeleteNodes(Array.from(canvas.selectedNodes));
+        canvas.clearSelection();
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
+        e.preventDefault();
+        canvas.copySelectedNodes(allNodes);
+        return;
+      }
+      if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
+        e.preventDefault();
+        const pastedNodes = canvas.pasteNodes();
+        if (pastedNodes) onPasteNodes(pastedNodes);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvas, allNodes, onDeleteNodes, onPasteNodes]);
+
+  // Handle selection box completion
+  useEffect(() => {
+    if (!canvas.isSelecting && canvas.selectionBox) {
+      const nodeIds = canvas.getNodesInSelectionBox(allNodes, canvas.selectionBox);
+      if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
+    }
+  }, [canvas.isSelecting, canvas.selectionBox, allNodes, canvas]);
+
+  // Handle canvas click to clear selection
+  const handleCanvasClick = useCallback((e) => {
+    if (e.target === canvas.canvasRef.current || e.target.classList.contains('canvas-bg')) {
+      canvas.clearSelection();
+      canvas.closeContextMenu();
+    }
+  }, [canvas]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <style>{`
         @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
         @keyframes flow { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
       `}</style>
-      <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `radial-gradient(circle at 1px 1px, ${theme.gridColor} 1px, transparent 0)`, backgroundSize: `${30 * canvas.zoom}px ${30 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
 
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
@@ -4776,6 +6308,10 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+            {/* Selection box */}
+            {canvas.isSelecting && canvas.selectionBox && (
+              <rect x={Math.min(canvas.selectionBox.startX, canvas.selectionBox.endX)} y={Math.min(canvas.selectionBox.startY, canvas.selectionBox.endY)} width={Math.abs(canvas.selectionBox.endX - canvas.selectionBox.startX)} height={Math.abs(canvas.selectionBox.endY - canvas.selectionBox.startY)} fill={`${COLORS.blue}20`} stroke={COLORS.blue} strokeWidth={1} strokeDasharray="4,4" />
+            )}
           </g>
         </svg>
 
@@ -4784,17 +6320,22 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
           {actorPositions.map(actor => {
             const pos = getActorPos(actor);
             const isDragging = canvas.dragging === actor.id;
+            const isSelected = canvas.selectedNodes.has(actor.id);
             return (
-              <div key={actor.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, actor.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, actor.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 45, top: pos.y - 55, width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: isDragging ? 'grabbing' : 'grab', transition: isDragging ? 'none' : 'transform 0.2s', transform: isDragging ? 'scale(1.05)' : 'scale(1)', touchAction: 'none' }}>
+              <div key={actor.id} onClick={(e) => canvas.handleNodeClick(e, actor.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, actor.id, actor.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, actor.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, actor.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, actor.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 45, top: pos.y - 55, width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: isDragging ? 'grabbing' : 'grab', transition: isDragging ? 'none' : 'transform 0.2s', transform: isDragging ? 'scale(1.05)' : 'scale(1)', touchAction: 'none' }}>
                 {/* Modern avatar circle */}
-                <div style={{ width: 70, height: 70, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.pink}30, ${COLORS.purple}20)`, border: `2px solid ${COLORS.pink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isDragging ? `0 8px 32px ${COLORS.pink}40` : `0 4px 20px rgba(0,0,0,0.3)`, transition: 'box-shadow 0.2s' }}>
+                <div style={{ width: 70, height: 70, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.pink}30, ${COLORS.purple}20)`, border: `2px solid ${isSelected ? COLORS.blue : COLORS.pink}`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 8px 32px ${COLORS.pink}40` : `0 4px 20px rgba(0,0,0,0.3)`, transition: 'box-shadow 0.2s' }}>
                   <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
                     <circle cx="12" cy="8" r="4" stroke={COLORS.pink} strokeWidth="1.5" fill={`${COLORS.pink}20`} />
                     <path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke={COLORS.pink} strokeWidth="1.5" strokeLinecap="round" fill="none" />
                   </svg>
                 </div>
                 <div style={{ marginTop: 10, padding: '4px 12px', background: 'rgba(0,0,0,0.4)', borderRadius: 12, backdropFilter: 'blur(8px)' }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }}>{actor.label}</span>
+                  {canvas.editingNode === actor.id ? (
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }} />
+                  ) : (
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }}>{actor.label}</span>
+                  )}
                 </div>
               </div>
             );
@@ -4804,15 +6345,36 @@ function UseCaseDiagram({ data, theme = THEMES.dark }) {
           {useCasePositions.map(uc => {
             const pos = getUseCasePos(uc);
             const isDragging = canvas.dragging === uc.id;
+            const isSelected = canvas.selectedNodes.has(uc.id);
             return (
-              <div key={uc.id} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(124, 58, 237, 0.1))`, border: `1.5px solid rgba(14, 165, 233, 0.5)`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isDragging ? `0 8px 32px ${COLORS.blue}30, inset 0 0 20px ${COLORS.blue}10` : `0 4px 20px rgba(0,0,0,0.2), inset 0 0 15px rgba(255,255,255,0.03)`, backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
-                <span style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center', padding: '0 12px', lineHeight: 1.3 }}>{uc.label}</span>
+              <div key={uc.id} onClick={(e) => canvas.handleNodeClick(e, uc.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, uc.id, uc.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, uc.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(124, 58, 237, 0.1))`, border: `1.5px solid ${isSelected ? COLORS.blue : 'rgba(14, 165, 233, 0.5)'}`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 8px 32px ${COLORS.blue}30, inset 0 0 20px ${COLORS.blue}10` : `0 4px 20px rgba(0,0,0,0.2), inset 0 0 15px rgba(255,255,255,0.03)`, backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
+                {canvas.editingNode === uc.id ? (
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center' }} />
+                ) : (
+                  <span style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center', padding: '0 12px', lineHeight: 1.3 }}>{uc.label}</span>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+      {/* Selection info */}
+      {canvas.selectedNodes.size > 0 && (
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.8)', padding: '6px 12px', borderRadius: 6, fontSize: '0.75rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{canvas.selectedNodes.size} selected</span>
+          <span style={{ opacity: 0.6 }}>|</span>
+          <span style={{ opacity: 0.7 }}>Del to delete • ⌘C copy • ⌘V paste</span>
+        </div>
+      )}
+      {/* Clipboard indicator */}
+      {canvas.clipboard && (
+        <div style={{ position: 'absolute', top: canvas.selectedNodes.size > 0 ? 48 : 12, left: 12, background: `${COLORS.green}20`, padding: '4px 10px', borderRadius: 4, fontSize: '0.7rem', color: COLORS.green, border: `1px solid ${COLORS.green}40` }}>
+          {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
+        </div>
+      )}
       <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.15, 3))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.85, 0.2))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      {/* Context menu */}
+      {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
   );
 }
@@ -4857,27 +6419,27 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelCh
   if (!parsed) return <div style={{ padding: 20, color: '#888' }}>No data</div>;
 
   switch (type) {
-    case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} />;
-    case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} />;
-    case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} />;
+    case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
-    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} />;
+    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'timeline': return <TimelineDiagram events={parsed} theme={t} />;
     case 'sequence': return <SequenceDiagram data={parsed} theme={t} />;
-    case 'orgchart': return <OrgChartDiagram data={parsed} theme={t} />;
-    case 'network': return <NetworkDiagram data={parsed} theme={t} />;
+    case 'orgchart': return <OrgChartDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'network': return <NetworkDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'gantt': return <GanttDiagram tasks={parsed} theme={t} />;
-    case 'deployment': return <DeploymentDiagram data={parsed} theme={t} />;
+    case 'deployment': return <DeploymentDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'pie': return <PieChartDiagram data={parsed} theme={t} />;
     case 'quadrant': return <QuadrantDiagram data={parsed} theme={t} />;
     case 'git': return <GitGraphDiagram data={parsed} theme={t} />;
     case 'wireframe': return <WireframeDiagram data={parsed} theme={t} />;
-    case 'class': return <ClassDiagram data={parsed} theme={t} />;
-    case 'usecase': return <UseCaseDiagram data={parsed} theme={t} />;
-    case 'component': return <ComponentDiagram data={parsed} theme={t} />;
-    case 'c4': return <C4Diagram data={parsed} theme={t} />;
+    case 'class': return <ClassDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'usecase': return <UseCaseDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'component': return <ComponentDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'c4': return <C4Diagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'requirement': return <RequirementDiagram data={parsed} theme={t} />;
     default: return <div style={{ padding: 20, color: '#888' }}>Unknown: {type}</div>;
   }

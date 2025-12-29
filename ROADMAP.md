@@ -51,21 +51,21 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 ### 2.2 Connection Enhancements
 - [x] **Click to add labels** - Double-click edges to edit ✅
 - [x] **Connection styles** - Solid, dashed, dotted, animated (right-click) ✅
-- [ ] **Arrow types** - Different arrowhead styles
-- [ ] **Curved vs straight** - Toggle connection style
-- [ ] **Connection routing** - Smart path finding
+- [x] **Arrow types** - Different arrowhead styles (triangle, open, diamond, circle, none) ✅
+- [x] **Curved vs straight** - Toggle connection style (curved, straight, step) ✅
+- [x] **Connection routing** - Smart path finding with orthogonal/step paths ✅
 
 ### 2.3 Node Customization
 - [x] **Color picker** - Custom node colors (right-click) ✅
 - [x] **Node resize** - Drag handles on selected nodes ✅
-- [ ] **Custom icons** - Icon selector
-- [ ] **Node shapes** - Rectangle, circle, diamond, etc.
+- [x] **Custom icons** - Icon selector with 20 icon options ✅
+- [x] **Node shapes** - Rectangle, rounded, circle, diamond, hexagon, pill ✅
 
 ### 2.4 Layout Tools
 - [x] **Snap to grid** - Magnetic alignment with toggle button ✅
-- [ ] **Alignment guides** - Visual alignment helpers
+- [x] **Alignment guides** - Visual alignment helpers when dragging ✅
 - [x] **Auto-layout** - Automatic arrangement ✅
-- [ ] **Distribute evenly** - Space nodes uniformly
+- [x] **Distribute evenly** - Space nodes uniformly (H/V buttons) ✅
 
 ---
 
@@ -179,7 +179,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 | Phase | Status | Progress |
 |-------|--------|----------|
 | Phase 1: Editor | Complete | 95% |
-| Phase 2: Diagram | In Progress | 80% |
+| Phase 2: Diagram | Complete | 100% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
 | Phase 5: Collaboration | Planned | 0% |
