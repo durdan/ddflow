@@ -64,7 +64,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 ### 2.4 Layout Tools
 - [x] **Snap to grid** - Magnetic alignment with toggle button ✅
 - [ ] **Alignment guides** - Visual alignment helpers
-- [ ] **Auto-layout** - Automatic arrangement
+- [x] **Auto-layout** - Automatic arrangement ✅
 - [ ] **Distribute evenly** - Space nodes uniformly
 
 ---
@@ -179,7 +179,7 @@ A comprehensive feature roadmap for DDFlow Diagram Engine.
 | Phase | Status | Progress |
 |-------|--------|----------|
 | Phase 1: Editor | Complete | 95% |
-| Phase 2: Diagram | In Progress | 75% |
+| Phase 2: Diagram | In Progress | 80% |
 | Phase 3: AI | Planned | 0% |
 | Phase 4: Templates | Planned | 0% |
 | Phase 5: Collaboration | Planned | 0% |
@@ -202,11 +202,12 @@ Completed:
 8. ~~Connection styles~~ ✅ Right-click edges for solid/dashed/dotted
 9. ~~Snap to grid~~ ✅ Toggle button in canvas controls
 10. ~~Node resize~~ ✅ Drag handles on selected nodes
+11. ~~Auto-layout~~ ✅ Layout button arranges nodes hierarchically
 
 Next priority:
-1. Auto-layout - Automatic arrangement
-2. Alignment guides - Visual helpers
-3. Arrow types - Different arrowhead styles
+1. Alignment guides - Visual helpers
+2. Arrow types - Different arrowhead styles
+3. Distribute evenly - Space nodes uniformly
 
 ---
 

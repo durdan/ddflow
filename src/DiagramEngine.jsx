@@ -696,7 +696,7 @@ function useInteractiveCanvas(initialPan = { x: 50, y: 50 }) {
 // CANVAS CONTROLS
 // ============================================
 
-function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom, snapToGrid, onToggleSnap }) {
+function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom, snapToGrid, onToggleSnap, onAutoLayout }) {
   return (
     <>
       <div style={{ position: 'absolute', bottom: 12, left: 12, display: 'flex', gap: 6, zIndex: 100 }}>
@@ -724,6 +724,29 @@ function CanvasControls({ onZoomIn, onZoomOut, onFit, onReset, zoom, snapToGrid,
           >
             <span style={{ fontSize: '1rem' }}>⊞</span>
             <span>{snapToGrid ? 'ON' : 'OFF'}</span>
+          </button>
+        )}
+        {onAutoLayout && (
+          <button
+            onClick={onAutoLayout}
+            title="Auto-layout: Arrange nodes automatically"
+            style={{
+              minWidth: 36,
+              height: 36,
+              padding: '0 10px',
+              background: 'rgba(0,0,0,0.7)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: 8,
+              color: '#fff',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>⚡</span>
+            <span>Layout</span>
           </button>
         )}
       </div>
@@ -2878,6 +2901,89 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
     }
   }, [canvas, edges, onEdgeLabelChange]);
 
+  // Auto-layout: arrange nodes in a hierarchical tree layout
+  const applyAutoLayout = useCallback(() => {
+    if (!initNodes || initNodes.length === 0) return;
+
+    // Build adjacency list
+    const outgoing = new Map(); // nodeId -> [targetIds]
+    const incoming = new Map(); // nodeId -> count
+    initNodes.forEach(n => {
+      outgoing.set(n.id, []);
+      incoming.set(n.id, 0);
+    });
+    edges.forEach(e => {
+      if (outgoing.has(e.source)) {
+        outgoing.get(e.source).push(e.target);
+      }
+      if (incoming.has(e.target)) {
+        incoming.set(e.target, incoming.get(e.target) + 1);
+      }
+    });
+
+    // Find root nodes (no incoming edges)
+    const roots = initNodes.filter(n => incoming.get(n.id) === 0);
+    if (roots.length === 0) {
+      // If no roots (cyclic), just use first node
+      roots.push(initNodes[0]);
+    }
+
+    // BFS to assign levels
+    const levels = new Map();
+    const queue = roots.map(r => ({ id: r.id, level: 0 }));
+    const visited = new Set();
+
+    while (queue.length > 0) {
+      const { id, level } = queue.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      levels.set(id, level);
+
+      const children = outgoing.get(id) || [];
+      children.forEach(childId => {
+        if (!visited.has(childId)) {
+          queue.push({ id: childId, level: level + 1 });
+        }
+      });
+    }
+
+    // Handle unvisited nodes (disconnected)
+    initNodes.forEach(n => {
+      if (!visited.has(n.id)) {
+        levels.set(n.id, 0);
+      }
+    });
+
+    // Group nodes by level
+    const levelGroups = new Map();
+    levels.forEach((level, id) => {
+      if (!levelGroups.has(level)) levelGroups.set(level, []);
+      levelGroups.get(level).push(id);
+    });
+
+    // Calculate positions
+    const LEVEL_HEIGHT = 120;
+    const NODE_SPACING = 180;
+    const START_Y = 100;
+    const newPositions = {};
+
+    levelGroups.forEach((nodeIds, level) => {
+      const y = START_Y + level * LEVEL_HEIGHT;
+      const totalWidth = (nodeIds.length - 1) * NODE_SPACING;
+      const startX = 300 - totalWidth / 2;
+
+      nodeIds.forEach((nodeId, index) => {
+        newPositions[nodeId] = {
+          x: startX + index * NODE_SPACING,
+          y: y
+        };
+      });
+    });
+
+    canvas.setPositions(newPositions);
+    canvas.fitToView(contentBounds);
+  }, [initNodes, edges, canvas, contentBounds]);
+
   // Handle keyboard shortcuts (Delete, Copy, Paste)
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -3238,7 +3344,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} onAutoLayout={applyAutoLayout} />
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
