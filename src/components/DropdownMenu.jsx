@@ -50,12 +50,12 @@ function DropdownMenu({
       display: 'flex',
       alignItems: 'center',
       gap: '6px',
-      padding: '5px 10px',
+      padding: '6px 12px',
       background: isOpen ? `${color}30` : `${color}20`,
       border: `1px solid ${isOpen ? color : `${color}50`}`,
       borderRadius: 6,
       color: color,
-      fontSize: '0.7rem',
+      fontSize: '0.8rem',
       fontWeight: 500,
       cursor: disabled ? 'not-allowed' : 'pointer',
       opacity: disabled ? 0.5 : 1,
@@ -63,7 +63,7 @@ function DropdownMenu({
       whiteSpace: 'nowrap',
     },
     caret: {
-      fontSize: '0.6rem',
+      fontSize: '0.65rem',
       transition: 'transform 0.15s ease',
       transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
     },
@@ -91,7 +91,7 @@ function DropdownMenu({
     },
     sectionLabel: {
       padding: '4px 12px',
-      fontSize: '0.6rem',
+      fontSize: '0.7rem',
       fontWeight: 600,
       color: isDark ? '#666' : '#94a3b8',
       textTransform: 'uppercase',
@@ -102,7 +102,7 @@ function DropdownMenu({
       alignItems: 'center',
       gap: '10px',
       padding: '8px 12px',
-      fontSize: '0.75rem',
+      fontSize: '0.85rem',
       color: item.disabled
         ? (isDark ? '#555' : '#cbd5e1')
         : (isDark ? '#e2e8f0' : '#334155'),
@@ -127,12 +127,12 @@ function DropdownMenu({
       fontWeight: 500,
     },
     itemDescription: {
-      fontSize: '0.65rem',
+      fontSize: '0.75rem',
       color: isDark ? '#666' : '#94a3b8',
       marginTop: '2px',
     },
     itemShortcut: {
-      fontSize: '0.6rem',
+      fontSize: '0.7rem',
       color: isDark ? '#555' : '#94a3b8',
       fontFamily: 'monospace',
       background: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
@@ -140,7 +140,7 @@ function DropdownMenu({
       borderRadius: 3,
     },
     itemBadge: (badgeColor) => ({
-      fontSize: '0.55rem',
+      fontSize: '0.65rem',
       padding: '2px 6px',
       background: `${badgeColor}20`,
       color: badgeColor,

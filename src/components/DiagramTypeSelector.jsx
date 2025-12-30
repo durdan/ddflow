@@ -112,16 +112,16 @@ function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
     },
     triggerText: {
       color: isDark ? '#fff' : '#1e293b',
-      fontSize: '0.8rem',
+      fontSize: '0.9rem',
       fontWeight: 600,
     },
     triggerDesc: {
       color: isDark ? '#888' : '#64748b',
-      fontSize: '0.65rem',
+      fontSize: '0.75rem',
     },
     caret: {
       color: isDark ? '#888' : '#64748b',
-      fontSize: '0.6rem',
+      fontSize: '0.65rem',
       marginLeft: '4px',
       transition: 'transform 0.15s ease',
       transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
@@ -154,7 +154,7 @@ function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
       alignItems: 'center',
       gap: '8px',
       padding: '6px 14px',
-      fontSize: '0.65rem',
+      fontSize: '0.75rem',
       fontWeight: 600,
       color: color,
       textTransform: 'uppercase',
@@ -170,7 +170,7 @@ function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '8px 10px',
+      padding: '10px 12px',
       borderRadius: 6,
       cursor: 'pointer',
       background: isActive
@@ -191,7 +191,7 @@ function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
       minWidth: 0,
     },
     typeName: (isActive) => ({
-      fontSize: '0.75rem',
+      fontSize: '0.85rem',
       fontWeight: isActive ? 600 : 500,
       color: isActive ? COLORS.purple : (isDark ? '#e2e8f0' : '#334155'),
       whiteSpace: 'nowrap',
@@ -199,7 +199,7 @@ function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
       textOverflow: 'ellipsis',
     }),
     typeDesc: {
-      fontSize: '0.6rem',
+      fontSize: '0.7rem',
       color: isDark ? '#666' : '#94a3b8',
     },
     checkmark: {

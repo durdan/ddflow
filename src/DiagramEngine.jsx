@@ -9839,7 +9839,7 @@ export default function Demo() {
             </h1>
           </div>
           <div style={{ height: 24, width: 1, background: theme.border }} />
-          <span style={{ color: theme.textMuted, fontSize: '0.7rem' }}>Diagram Engine</span>
+          <span style={{ color: theme.textMuted, fontSize: '0.85rem' }}>Diagram Engine</span>
         </div>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
           <button onClick={handleToggleTheme} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}>
@@ -9866,7 +9866,7 @@ export default function Demo() {
             📖
           </a>
           <div style={{ height: 20, width: 1, background: theme.border, margin: '0 4px' }} />
-          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 14px', background: showAIChat ? `linear-gradient(135deg, ${colorSettings.accentPrimary}, ${colorSettings.accentSecondary})` : `${colorSettings.accentPrimary}20`, border: `1px solid ${showAIChat ? 'transparent' : colorSettings.accentPrimary}`, borderRadius: 6, color: showAIChat ? '#fff' : colorSettings.accentPrimary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+          <button onClick={() => setShowAIChat(!showAIChat)} style={{ padding: '6px 14px', background: showAIChat ? `linear-gradient(135deg, ${colorSettings.accentPrimary}, ${colorSettings.accentSecondary})` : `${colorSettings.accentPrimary}20`, border: `1px solid ${showAIChat ? 'transparent' : colorSettings.accentPrimary}`, borderRadius: 6, color: showAIChat ? '#fff' : colorSettings.accentPrimary, fontSize: '0.85rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
             🤖 AI Chat
           </button>
         </div>
@@ -9970,7 +9970,7 @@ export default function Demo() {
         <div style={{ width: 1, height: 28, background: theme.border }} />
 
         {/* Node Library Toggle */}
-        <button onClick={() => setShowNodeLibrary(!showNodeLibrary)} style={{ padding: '6px 12px', background: showNodeLibrary ? `${COLORS.orange}30` : 'rgba(255,255,255,0.05)', border: `1px solid ${showNodeLibrary ? COLORS.orange : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showNodeLibrary ? COLORS.orange : (themeName === 'dark' ? '#888' : '#64748b'), fontSize: '0.7rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500 }} title="Toggle Node Library">
+        <button onClick={() => setShowNodeLibrary(!showNodeLibrary)} style={{ padding: '6px 12px', background: showNodeLibrary ? `${COLORS.orange}30` : 'rgba(255,255,255,0.05)', border: `1px solid ${showNodeLibrary ? COLORS.orange : 'rgba(255,255,255,0.1)'}`, borderRadius: 6, color: showNodeLibrary ? COLORS.orange : (themeName === 'dark' ? '#888' : '#64748b'), fontSize: '0.8rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500 }} title="Toggle Node Library">
           {showNodeLibrary ? '📚' : '📦'} Nodes
         </button>
 
