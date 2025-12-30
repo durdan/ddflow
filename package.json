@@ -119,5 +119,9 @@
   },
   "engines": {
     "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "dagre": "^0.8.5",
+    "roughjs": "^4.6.6"
   }
 }

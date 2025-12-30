@@ -15,7 +15,7 @@ const DIAGRAM_CATEGORIES = {
   'Flow & Process': {
     icon: '🔀',
     color: COLORS.blue,
-    types: ['flowchart', 'activity', 'state', 'journey'],
+    types: ['flowchart', 'activity', 'state', 'journey', 'swimlane', 'sankey'],
   },
   'Architecture': {
     icon: '🏗️',
@@ -68,6 +68,8 @@ const TYPE_INFO = {
   quadrant: { icon: '📊', name: 'Quadrant', desc: 'Priority matrix' },
   wireframe: { icon: '📱', name: 'Wireframe', desc: 'UI mockups' },
   git: { icon: '🌿', name: 'Git Graph', desc: 'Branch history' },
+  swimlane: { icon: '🏊', name: 'Swimlane', desc: 'Process with roles' },
+  sankey: { icon: '🌊', name: 'Sankey', desc: 'Flow visualization' },
 };
 
 function DiagramTypeSelector({ activeType, onTypeChange, theme }) {
