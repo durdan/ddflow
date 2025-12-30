@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import rough from 'roughjs';
+import dagre from 'dagre';
 import AIChatPanel from './components/AIChatPanel.jsx';
 import TemplateGallery from './components/TemplateGallery.jsx';
 import SaveTemplateModal from './components/SaveTemplateModal.jsx';
@@ -9,6 +11,7 @@ import ColorSettingsPanel from './components/ColorSettingsPanel.jsx';
 import ImageImportModal from './components/ImageImportModal.jsx';
 import PlantUMLImportModal from './components/PlantUMLImportModal.jsx';
 import PlantUMLExportModal from './components/PlantUMLExportModal.jsx';
+import ShapeLibrary from './components/ShapeLibrary.jsx';
 import { exportAsPNG, exportAsSVG, copyToClipboard, exportAsPDF } from './services/exportService.js';
 import { explainDiagram, suggestImprovements, validateDiagram, isAIConfigured } from './services/aiService.js';
 import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTCUTS } from './hooks/useKeyboardShortcuts.js';
@@ -86,6 +89,26 @@ function saveTheme(theme) {
   try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch {}
 }
 
+// Sketch mode persistence helpers
+const SKETCH_MODE_STORAGE_KEY = 'ddflow_sketch_mode';
+function getSavedSketchMode() {
+  try {
+    return localStorage.getItem(SKETCH_MODE_STORAGE_KEY) === 'true';
+  } catch { return false; }
+}
+function saveSketchMode(enabled) {
+  try { localStorage.setItem(SKETCH_MODE_STORAGE_KEY, enabled ? 'true' : 'false'); } catch {}
+}
+
+// Sketch mode color palette (pencil-like, muted colors)
+const SKETCH_COLORS = {
+  stroke: '#333333',
+  fill: '#faf9f6',
+  paper: '#fffef9',
+  accent: '#5c5c5c',
+  highlight: '#e8e4df',
+};
+
 const COLORS = {
   purple: '#7C3AED', blue: '#0EA5E9', green: '#10B981', orange: '#F59E0B',
   pink: '#EC4899', red: '#EF4444', cyan: '#06B6D4', violet: '#8B5CF6',
@@ -100,13 +123,19 @@ const BRANCH_COLORS = [COLORS.purple, COLORS.blue, COLORS.green, COLORS.orange, 
 // VISUAL STYLING HELPERS
 // ============================================
 
-// Generate gradient background for nodes
-const getNodeGradient = (color) => {
+// Generate gradient background for nodes (sketch mode uses paper-like fill)
+const getNodeGradient = (color, isSketch = false) => {
+  if (isSketch) {
+    return SKETCH_COLORS.fill;
+  }
   return `linear-gradient(135deg, ${color}38, ${color}15)`;
 };
 
-// Generate layered shadow for nodes based on state
-const getNodeShadow = (nodeColor, isDragging, isSelected) => {
+// Generate layered shadow for nodes based on state (sketch mode has no shadows)
+const getNodeShadow = (nodeColor, isDragging, isSelected, isSketch = false) => {
+  if (isSketch) {
+    return 'none';
+  }
   if (isDragging) {
     return `0 0 0 2px ${nodeColor}, 0 12px 28px ${nodeColor}50, 0 20px 40px rgba(0,0,0,0.25)`;
   }
@@ -114,6 +143,264 @@ const getNodeShadow = (nodeColor, isDragging, isSelected) => {
     return `0 0 0 3px rgba(124,58,237,0.7), 0 8px 24px rgba(124,58,237,0.35), 0 16px 32px ${nodeColor}25`;
   }
   return `0 2px 4px rgba(0,0,0,0.08), 0 8px 20px ${nodeColor}25, 0 16px 40px ${nodeColor}12`;
+};
+
+// Get font family based on sketch mode
+const getSketchFont = (isSketch = false) => {
+  return isSketch ? "'Caveat', cursive" : 'system-ui, -apple-system, sans-serif';
+};
+
+// Get font size adjusted for sketch mode (handwriting fonts need larger size)
+const getSketchFontSize = (baseSize, isSketch = false) => {
+  if (isSketch) {
+    // Parse the base size and increase by ~25% for readability
+    if (typeof baseSize === 'string') {
+      const numVal = parseFloat(baseSize);
+      const unit = baseSize.replace(/[\d.]/g, '') || 'px';
+      return `${numVal * 1.25}${unit}`;
+    }
+    return baseSize * 1.25;
+  }
+  return baseSize;
+};
+
+// Get border style for sketch mode (darker, pencil-like)
+const getSketchBorder = (color, isSketch = false) => {
+  if (isSketch) {
+    return `2px solid ${SKETCH_COLORS.stroke}`;
+  }
+  return `2px solid ${color}`;
+};
+
+// ============================================
+// ROUGH.JS SKETCH RENDERING UTILITIES
+// ============================================
+
+// Rough.js configuration for hand-drawn aesthetics
+const ROUGH_CONFIG = {
+  roughness: 1.5,      // How rough the drawing is (0 = clean, 3 = very rough)
+  bowing: 1,           // Amount of bowing in lines
+  strokeWidth: 1.5,
+  fillStyle: 'hachure', // Cross-hatch fill for sketchy look
+  fillWeight: 0.5,
+  hachureGap: 4,
+  seed: 12345,         // Consistent randomness for same shape rendering
+};
+
+// Create a rough generator for SVG rendering
+const createRoughGenerator = (svg) => {
+  if (!svg) return null;
+  return rough.svg(svg);
+};
+
+// Generate rough rectangle path as SVG string
+const getRoughRectPath = (x, y, width, height, options = {}) => {
+  const config = { ...ROUGH_CONFIG, ...options };
+  const roughness = config.roughness;
+
+  // Generate hand-drawn wobble for each corner
+  const wobble = (val) => val + (Math.random() - 0.5) * roughness * 2;
+
+  const points = [
+    [wobble(x), wobble(y)],
+    [wobble(x + width), wobble(y)],
+    [wobble(x + width), wobble(y + height)],
+    [wobble(x), wobble(y + height)]
+  ];
+
+  // Create path with slight curves between points
+  let path = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i <= 4; i++) {
+    const curr = points[i % 4];
+    const prev = points[(i - 1) % 4];
+    const mid = [(prev[0] + curr[0]) / 2, (prev[1] + curr[1]) / 2];
+    // Add slight curve
+    const curve = roughness * (Math.random() - 0.5);
+    path += ` Q ${mid[0] + curve} ${mid[1] + curve} ${curr[0]} ${curr[1]}`;
+  }
+  path += ' Z';
+  return path;
+};
+
+// Generate rough ellipse/circle path
+const getRoughEllipsePath = (cx, cy, rx, ry, options = {}) => {
+  const config = { ...ROUGH_CONFIG, ...options };
+  const roughness = config.roughness;
+  const segments = 16;
+  const points = [];
+
+  for (let i = 0; i < segments; i++) {
+    const angle = (2 * Math.PI * i) / segments;
+    const wobbleR = 1 + (Math.random() - 0.5) * roughness * 0.1;
+    points.push([
+      cx + rx * wobbleR * Math.cos(angle),
+      cy + ry * wobbleR * Math.sin(angle)
+    ]);
+  }
+
+  let path = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i <= segments; i++) {
+    const curr = points[i % segments];
+    const prev = points[(i - 1) % segments];
+    const next = points[(i + 1) % segments];
+
+    // Bezier control points for smooth curve
+    const cp1 = [prev[0] + (curr[0] - prev[0]) * 0.5, prev[1] + (curr[1] - prev[1]) * 0.5];
+    const cp2 = [curr[0] - (next[0] - prev[0]) * 0.25, curr[1] - (next[1] - prev[1]) * 0.25];
+
+    path += ` C ${cp1[0]} ${cp1[1]} ${cp2[0]} ${cp2[1]} ${curr[0]} ${curr[1]}`;
+  }
+  path += ' Z';
+  return path;
+};
+
+// Generate rough line path with hand-drawn wobble
+const getRoughLinePath = (x1, y1, x2, y2, options = {}) => {
+  const config = { ...ROUGH_CONFIG, ...options };
+  const roughness = config.roughness;
+
+  // Calculate line length and angle
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const length = Math.sqrt(dx * dx + dy * dy);
+  const segments = Math.max(2, Math.floor(length / 20));
+
+  const points = [[x1, y1]];
+  for (let i = 1; i < segments; i++) {
+    const t = i / segments;
+    const perpX = -dy / length;
+    const perpY = dx / length;
+    const wobble = (Math.random() - 0.5) * roughness * 2;
+    points.push([
+      x1 + dx * t + perpX * wobble,
+      y1 + dy * t + perpY * wobble
+    ]);
+  }
+  points.push([x2, y2]);
+
+  let path = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length; i++) {
+    path += ` L ${points[i][0]} ${points[i][1]}`;
+  }
+  return path;
+};
+
+// Generate rough diamond path
+const getRoughDiamondPath = (cx, cy, width, height, options = {}) => {
+  const config = { ...ROUGH_CONFIG, ...options };
+  const roughness = config.roughness;
+
+  const wobble = (val) => val + (Math.random() - 0.5) * roughness * 2;
+
+  const points = [
+    [wobble(cx), wobble(cy - height / 2)],      // Top
+    [wobble(cx + width / 2), wobble(cy)],       // Right
+    [wobble(cx), wobble(cy + height / 2)],      // Bottom
+    [wobble(cx - width / 2), wobble(cy)]        // Left
+  ];
+
+  let path = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i <= 4; i++) {
+    const curr = points[i % 4];
+    path += ` L ${curr[0]} ${curr[1]}`;
+  }
+  path += ' Z';
+  return path;
+};
+
+// Generate hachure fill pattern for rough shapes
+const getHachurePattern = (x, y, width, height, options = {}) => {
+  const config = { ...ROUGH_CONFIG, ...options };
+  const gap = config.hachureGap;
+  const angle = -41 * Math.PI / 180; // Standard hachure angle
+  const lines = [];
+
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const diagonal = Math.sqrt(width * width + height * height);
+
+  for (let offset = -diagonal; offset < diagonal * 2; offset += gap) {
+    const x1 = x + offset * cos;
+    const y1 = y + offset * sin;
+    const x2 = x1 + diagonal * sin;
+    const y2 = y1 - diagonal * cos;
+
+    // Clip to rectangle bounds (simplified)
+    lines.push(`M ${x1} ${y1} L ${x2} ${y2}`);
+  }
+
+  return lines.join(' ');
+};
+
+// Render a rough shape SVG element
+const RoughShape = ({ type, x, y, width, height, cx, cy, rx, ry, fill, stroke, strokeWidth = 1.5, roughness = 1.5, showHachure = false }) => {
+  const pathRef = useRef(null);
+
+  const shapePath = useMemo(() => {
+    const opts = { roughness };
+    switch (type) {
+      case 'rect':
+        return getRoughRectPath(x, y, width, height, opts);
+      case 'ellipse':
+      case 'circle':
+        return getRoughEllipsePath(cx, cy, rx, ry || rx, opts);
+      case 'diamond':
+        return getRoughDiamondPath(cx, cy, width, height, opts);
+      default:
+        return '';
+    }
+  }, [type, x, y, width, height, cx, cy, rx, ry, roughness]);
+
+  const hachurePath = useMemo(() => {
+    if (!showHachure) return '';
+    if (type === 'rect') return getHachurePattern(x, y, width, height);
+    if (type === 'ellipse' || type === 'circle') {
+      return getHachurePattern(cx - rx, cy - (ry || rx), rx * 2, (ry || rx) * 2);
+    }
+    return '';
+  }, [showHachure, type, x, y, width, height, cx, cy, rx, ry]);
+
+  return (
+    <g ref={pathRef}>
+      {showHachure && (
+        <path
+          d={hachurePath}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={0.5}
+          strokeOpacity={0.3}
+          clipPath={`path('${shapePath}')`}
+        />
+      )}
+      <path
+        d={shapePath}
+        fill={fill || 'none'}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </g>
+  );
+};
+
+// Render a rough line SVG element
+const RoughLine = ({ x1, y1, x2, y2, stroke, strokeWidth = 1.5, roughness = 1.5, markerEnd }) => {
+  const linePath = useMemo(() => {
+    return getRoughLinePath(x1, y1, x2, y2, { roughness });
+  }, [x1, y1, x2, y2, roughness]);
+
+  return (
+    <path
+      d={linePath}
+      fill="none"
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      markerEnd={markerEnd}
+    />
+  );
 };
 
 // Generate smooth cubic bezier path for connections
@@ -132,6 +419,52 @@ const getCurvedPath = (sx, sy, tx, ty) => {
   // Vertical-ish connections: curve vertically
   const dir = dy > 0 ? 1 : -1;
   return `M ${sx} ${sy} C ${sx} ${sy + curvature * dir}, ${tx} ${ty - curvature * dir}, ${tx} ${ty}`;
+};
+
+// Generate wobbly/sketchy path for hand-drawn effect
+const getSketchyPath = (sx, sy, tx, ty, isSketch = false) => {
+  if (!isSketch) {
+    return getCurvedPath(sx, sy, tx, ty);
+  }
+
+  // Add slight wobble to the path for hand-drawn effect
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  // Number of segments based on distance
+  const segments = Math.max(3, Math.floor(dist / 40));
+
+  // Generate path with slight random offsets
+  const points = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    let x = sx + dx * t;
+    let y = sy + dy * t;
+
+    // Add wobble (except for start and end points)
+    if (i > 0 && i < segments) {
+      const wobble = 3;
+      x += (Math.random() - 0.5) * wobble * 2;
+      y += (Math.random() - 0.5) * wobble * 2;
+    }
+    points.push({ x, y });
+  }
+
+  // Create smooth curve through points
+  if (points.length < 2) return `M ${sx} ${sy} L ${tx} ${ty}`;
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const cpx = (prev.x + curr.x) / 2;
+    const cpy = (prev.y + curr.y) / 2;
+    path += ` Q ${prev.x} ${prev.y} ${cpx} ${cpy}`;
+  }
+  path += ` L ${points[points.length - 1].x} ${points[points.length - 1].y}`;
+
+  return path;
 };
 
 // ============================================
@@ -1233,7 +1566,8 @@ function EdgeStyleMenu({ x, y, edgeId, currentStyle, currentArrowType, currentPa
           {[
             { name: 'Curved', type: 'curved', icon: '⌒' },
             { name: 'Straight', type: 'straight', icon: '—' },
-            { name: 'Step', type: 'step', icon: '⌐' },
+            { name: 'Elbow', type: 'step', icon: '⌐' },
+            { name: 'Rounded', type: 'rounded', icon: '╭' },
           ].map((opt) => {
             const isSelected = currentPathType === opt.type || (!currentPathType && opt.type === 'curved');
             return (
@@ -1493,108 +1827,705 @@ const Parsers = {
   },
 
   architecture: (text) => {
-    const nodes = new Map(), edges = [];
+    const nodes = new Map(), edges = [], groups = [];
     const typeStyles = {
-      clients: { color: COLORS.pink, icon: '🖥️' }, client: { color: COLORS.pink, icon: '🖥️' },
-      gateway: { color: COLORS.orange, icon: '🚪' }, gateways: { color: COLORS.orange, icon: '🚪' },
-      services: { color: COLORS.blue, icon: '⚙️' }, service: { color: COLORS.blue, icon: '⚙️' },
-      databases: { color: COLORS.emerald, icon: '🗄️' }, database: { color: COLORS.emerald, icon: '🗄️' },
-      data: { color: COLORS.emerald, icon: '🗄️' }, cache: { color: COLORS.red, icon: '⚡' },
-      queue: { color: COLORS.amber, icon: '📬' }, storage: { color: COLORS.emerald, icon: '💾' }
+      // Client/Frontend
+      clients: { color: COLORS.pink, icon: '🖥️', shape: 'rect' },
+      client: { color: COLORS.pink, icon: '🖥️', shape: 'rect' },
+      web: { color: COLORS.pink, icon: '🌐', shape: 'rect' },
+      mobile: { color: COLORS.pink, icon: '📱', shape: 'rect' },
+      browser: { color: COLORS.pink, icon: '🌐', shape: 'rect' },
+      user: { color: COLORS.pink, icon: '👤', shape: 'rect' },
+      users: { color: COLORS.pink, icon: '👥', shape: 'rect' },
+
+      // Gateway/Network
+      gateway: { color: COLORS.orange, icon: '🚪', shape: 'hexagon' },
+      gateways: { color: COLORS.orange, icon: '🚪', shape: 'hexagon' },
+      api: { color: COLORS.orange, icon: '🔌', shape: 'hexagon' },
+      lb: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon' },
+      loadbalancer: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon' },
+      proxy: { color: COLORS.orange, icon: '🔀', shape: 'hexagon' },
+      cdn: { color: COLORS.orange, icon: '🌍', shape: 'hexagon' },
+      dns: { color: COLORS.orange, icon: '📍', shape: 'rect' },
+      firewall: { color: COLORS.red, icon: '🛡️', shape: 'hexagon' },
+
+      // Services/Backend
+      services: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
+      service: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
+      backend: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
+      microservice: { color: COLORS.blue, icon: '🔷', shape: 'rect' },
+      microservices: { color: COLORS.blue, icon: '🔷', shape: 'rect' },
+      function: { color: COLORS.violet, icon: 'λ', shape: 'rect' },
+      lambda: { color: COLORS.violet, icon: 'λ', shape: 'rect' },
+      serverless: { color: COLORS.violet, icon: '☁️', shape: 'rect' },
+      worker: { color: COLORS.blue, icon: '👷', shape: 'rect' },
+
+      // Containers/Orchestration
+      container: { color: COLORS.cyan, icon: '📦', shape: 'rect' },
+      containers: { color: COLORS.cyan, icon: '📦', shape: 'rect' },
+      docker: { color: COLORS.cyan, icon: '🐳', shape: 'rect' },
+      k8s: { color: COLORS.cyan, icon: '☸️', shape: 'rect' },
+      kubernetes: { color: COLORS.cyan, icon: '☸️', shape: 'rect' },
+      pod: { color: COLORS.cyan, icon: '🫛', shape: 'rect' },
+      pods: { color: COLORS.cyan, icon: '🫛', shape: 'rect' },
+      cluster: { color: COLORS.cyan, icon: '🔷', shape: 'rect' },
+      node: { color: COLORS.cyan, icon: '🖥️', shape: 'rect' },
+
+      // Data/Storage
+      databases: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
+      database: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
+      db: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
+      data: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
+      sql: { color: COLORS.emerald, icon: '📊', shape: 'cylinder' },
+      nosql: { color: COLORS.emerald, icon: '📋', shape: 'cylinder' },
+      storage: { color: COLORS.emerald, icon: '💾', shape: 'cylinder' },
+      s3: { color: COLORS.emerald, icon: '🪣', shape: 'cylinder' },
+      blob: { color: COLORS.emerald, icon: '📁', shape: 'cylinder' },
+
+      // Cache/Memory
+      cache: { color: COLORS.red, icon: '⚡', shape: 'cylinder' },
+      redis: { color: COLORS.red, icon: '⚡', shape: 'cylinder' },
+      memcached: { color: COLORS.red, icon: '🧠', shape: 'cylinder' },
+
+      // Messaging/Queue
+      queue: { color: COLORS.amber, icon: '📬', shape: 'rect' },
+      queues: { color: COLORS.amber, icon: '📬', shape: 'rect' },
+      mq: { color: COLORS.amber, icon: '📨', shape: 'rect' },
+      kafka: { color: COLORS.amber, icon: '📊', shape: 'rect' },
+      rabbitmq: { color: COLORS.amber, icon: '🐰', shape: 'rect' },
+      pubsub: { color: COLORS.amber, icon: '📢', shape: 'rect' },
+      eventbus: { color: COLORS.amber, icon: '🚌', shape: 'rect' },
+      stream: { color: COLORS.amber, icon: '🌊', shape: 'rect' },
+
+      // Monitoring/Observability
+      monitoring: { color: COLORS.fuchsia, icon: '📈', shape: 'rect' },
+      metrics: { color: COLORS.fuchsia, icon: '📊', shape: 'rect' },
+      logging: { color: COLORS.fuchsia, icon: '📝', shape: 'rect' },
+      logs: { color: COLORS.fuchsia, icon: '📝', shape: 'rect' },
+      tracing: { color: COLORS.fuchsia, icon: '🔍', shape: 'rect' },
+      alerting: { color: COLORS.fuchsia, icon: '🔔', shape: 'rect' },
+
+      // Security
+      auth: { color: COLORS.indigo, icon: '🔐', shape: 'rect' },
+      identity: { color: COLORS.indigo, icon: '🆔', shape: 'rect' },
+      vault: { color: COLORS.indigo, icon: '🔒', shape: 'rect' },
+      secrets: { color: COLORS.indigo, icon: '🔑', shape: 'rect' },
+
+      // Cloud/Infrastructure
+      cloud: { color: COLORS.sky, icon: '☁️', shape: 'rect' },
+      aws: { color: COLORS.orange, icon: '☁️', shape: 'rect' },
+      gcp: { color: COLORS.blue, icon: '☁️', shape: 'rect' },
+      azure: { color: COLORS.sky, icon: '☁️', shape: 'rect' },
+      vpc: { color: COLORS.slate, icon: '🔲', shape: 'rect' },
+      subnet: { color: COLORS.slate, icon: '📡', shape: 'rect' },
+      region: { color: COLORS.slate, icon: '🌍', shape: 'rect' },
+      zone: { color: COLORS.slate, icon: '📍', shape: 'rect' },
+
+      // External/Third-party
+      external: { color: COLORS.slate, icon: '🔗', shape: 'rect' },
+      thirdparty: { color: COLORS.slate, icon: '🔗', shape: 'rect' },
+      saas: { color: COLORS.slate, icon: '☁️', shape: 'rect' },
+      email: { color: COLORS.slate, icon: '📧', shape: 'rect' },
+      payment: { color: COLORS.slate, icon: '💳', shape: 'rect' },
+      analytics: { color: COLORS.slate, icon: '📊', shape: 'rect' },
     };
-    let currentY = 80;
-    const CANVAS_WIDTH = 1200; // Expanded canvas for more nodes
-    const MIN_SPACING = 150; // Minimum spacing between nodes
-    const NODE_WIDTH = 130;
-    const ROW_HEIGHT = 120; // Height between rows in same layer
-    const LAYER_GAP = 40; // Extra gap between different layers
 
-    text.split('\n').forEach(line => {
-      line = line.trim();
-      if (!line || line.startsWith('#')) return;
-      const layerMatch = line.match(/^\[(\w+)\]\s*(.+)/);
-      if (layerMatch) {
-        const style = typeStyles[layerMatch[1].toLowerCase()] || { color: COLORS.slate, icon: '📦' };
-        const items = layerMatch[2].split(',').map(s => s.trim()).filter(s => s);
+    // Layout constants
+    const NODE_WIDTH = 150;
+    const NODE_HEIGHT = 90;
+    const groupColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.amber, COLORS.pink];
 
-        // Calculate how many nodes fit per row
-        const maxNodesPerRow = Math.max(1, Math.floor((CANVAS_WIDTH - 100) / MIN_SPACING));
-        const rows = [];
-        for (let i = 0; i < items.length; i += maxNodesPerRow) {
-          rows.push(items.slice(i, i + maxNodesPerRow));
-        }
+    // First pass: Parse all nodes, edges, and groups
+    let layerIndex = 0;
+    const nodeToLayer = new Map(); // Track which layer each node belongs to
+    const nodeToGroups = new Map(); // Track all groups each node belongs to (for nested)
+    const groupDefs = new Map(); // group name -> { nodes: [], colorIndex, parent, children }
+    const groupStack = []; // Stack for nested groups
+    let groupColorIndex = 0;
 
-        // Position nodes row by row
-        rows.forEach((rowItems, rowIndex) => {
-          // Calculate spacing for this row
-          const totalWidth = rowItems.length * NODE_WIDTH + (rowItems.length - 1) * (MIN_SPACING - NODE_WIDTH);
-          const spacing = rowItems.length <= 1 ? 0 : Math.max(MIN_SPACING, (CANVAS_WIDTH - 100) / rowItems.length);
-          const startX = (CANVAS_WIDTH - (rowItems.length - 1) * spacing) / 2;
+    const lines = text.split('\n');
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      let line = lines[lineIdx].trim();
+      if (!line || line.startsWith('#')) continue;
 
-          rowItems.forEach((item, i) => {
-            const id = item.toLowerCase().replace(/[^a-z0-9]/g, '_');
-            nodes.set(id, { id, label: item, ...style, x: startX + i * spacing, y: currentY + rowIndex * ROW_HEIGHT });
-          });
+      // Parse group start: group "name" { (with optional leading whitespace for nesting)
+      const groupStartMatch = line.match(/^group\s+["']([^"']+)["']\s*\{?\s*$/i);
+      if (groupStartMatch) {
+        const groupName = groupStartMatch[1];
+        const parentGroup = groupStack.length > 0 ? groupStack[groupStack.length - 1] : null;
+
+        groupDefs.set(groupName, {
+          name: groupName,
+          nodes: [],
+          colorIndex: groupColorIndex++,
+          parent: parentGroup,
+          children: []
         });
 
-        // Move to next layer position
-        currentY += rows.length * ROW_HEIGHT + LAYER_GAP;
-        return;
+        // Register as child of parent
+        if (parentGroup && groupDefs.has(parentGroup)) {
+          groupDefs.get(parentGroup).children.push(groupName);
+        }
+
+        groupStack.push(groupName);
+        continue;
       }
-      // Parse edges with optional labels: A -> B or A -> B: label
-      const edgeMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
-      if (edgeMatch) {
-        const [, source, target, label] = edgeMatch;
-        edges.push({
-          id: `e-${edges.length}`,
-          source: source.trim().toLowerCase().replace(/[^a-z0-9]/g, '_'),
-          target: target.trim().toLowerCase().replace(/[^a-z0-9]/g, '_'),
-          label: label?.trim() || ''
+
+      // Parse group end: }
+      if (line === '}' && groupStack.length > 0) {
+        groupStack.pop();
+        continue;
+      }
+
+      // Parse layer: [type] node1, node2
+      const layerMatch = line.match(/^\[(\w+)\]\s*(.+)/);
+      if (layerMatch) {
+        const typeName = layerMatch[1].toLowerCase();
+        const style = typeStyles[typeName] || { color: COLORS.slate, icon: '📦', shape: 'rect' };
+        const items = layerMatch[2].split(',').map(s => s.trim()).filter(s => s);
+
+        // Current innermost group
+        const currentGroup = groupStack.length > 0 ? groupStack[groupStack.length - 1] : null;
+
+        items.forEach((item) => {
+          // Check for description: "NodeName: description"
+          const descMatch = item.match(/^([^:]+):\s*(.+)$/);
+          const label = descMatch ? descMatch[1].trim() : item;
+          const description = descMatch ? descMatch[2].trim() : '';
+
+          const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+          const node = {
+            id,
+            label,
+            description,
+            ...style,
+            x: 0, // Will be set by dagre
+            y: 0, // Will be set by dagre
+            width: Math.max(NODE_WIDTH, label.length * 9 + 40),
+            layerIndex,
+            group: currentGroup // Innermost group for positioning
+          };
+          nodes.set(id, node);
+          nodeToLayer.set(id, layerIndex);
+
+          // Track membership in ALL ancestor groups (for nested containment)
+          if (groupStack.length > 0) {
+            nodeToGroups.set(id, [...groupStack]); // Copy all groups in stack
+            // Add node to all groups in the stack
+            groupStack.forEach(groupName => {
+              if (groupDefs.has(groupName)) {
+                groupDefs.get(groupName).nodes.push(id);
+              }
+            });
+          }
+        });
+        layerIndex++;
+        continue;
+      }
+
+      // Parse edges with multiple styles
+      const edgePatterns = [
+        { regex: /^(.+?)\s*<->\s*(.+?)(?::\s*(.+))?$/, style: 'bidirectional' },
+        { regex: /^(.+?)\s*-->\s*(.+?)(?::\s*(.+))?$/, style: 'dotted' },
+        { regex: /^(.+?)\s*==>\s*(.+?)(?::\s*(.+))?$/, style: 'thick' },
+        { regex: /^(.+?)\s*->>\s*(.+?)(?::\s*(.+))?$/, style: 'async' },
+        { regex: /^(.+?)\s*-\.->\s*(.+?)(?::\s*(.+))?$/, style: 'dashed' },
+        { regex: /^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/, style: 'normal' },
+      ];
+
+      for (const { regex, style } of edgePatterns) {
+        const match = line.match(regex);
+        if (match) {
+          const [, source, target, label] = match;
+          const sourceId = source.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+          const targetId = target.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+          edges.push({
+            id: `e-${edges.length}`,
+            source: sourceId,
+            target: targetId,
+            label: label?.trim() || '',
+            style
+          });
+
+          // For bidirectional, add reverse edge for rendering
+          if (style === 'bidirectional') {
+            edges.push({
+              id: `e-${edges.length}`,
+              source: targetId,
+              target: sourceId,
+              label: '',
+              style: 'normal'
+            });
+          }
+          break;
+        }
+      }
+    }
+
+    // Analyze graph structure to determine best layout
+    const nodeCount = nodes.size;
+    const edgeCount = edges.length;
+    const isComplex = nodeCount > 8 || edgeCount > 10;
+
+    // Check if all nodes are in same layer (user didn't differentiate)
+    const uniqueLayers = new Set();
+    nodes.forEach(n => uniqueLayers.add(n.layerIndex));
+    const needsAutoRanking = uniqueLayers.size <= 2 && nodeCount > 4;
+
+    // If nodes lack proper layer separation, compute ranks from edge topology
+    if (needsAutoRanking) {
+      // Build adjacency for topological analysis
+      const inDegree = new Map();
+      const outEdges = new Map();
+      nodes.forEach((_, id) => {
+        inDegree.set(id, 0);
+        outEdges.set(id, []);
+      });
+
+      edges.forEach((edge) => {
+        if (nodes.has(edge.source) && nodes.has(edge.target)) {
+          outEdges.get(edge.source).push(edge.target);
+          inDegree.set(edge.target, (inDegree.get(edge.target) || 0) + 1);
+        }
+      });
+
+      // Compute rank using BFS from sources (nodes with inDegree 0)
+      const rank = new Map();
+      const queue = [];
+      nodes.forEach((node, id) => {
+        if (inDegree.get(id) === 0) {
+          rank.set(id, 0);
+          queue.push(id);
+        }
+      });
+
+      // BFS to assign ranks
+      while (queue.length > 0) {
+        const nodeId = queue.shift();
+        const currentRank = rank.get(nodeId);
+        outEdges.get(nodeId).forEach((targetId) => {
+          const newRank = currentRank + 1;
+          if (!rank.has(targetId) || rank.get(targetId) < newRank) {
+            rank.set(targetId, newRank);
+          }
+          inDegree.set(targetId, inDegree.get(targetId) - 1);
+          if (inDegree.get(targetId) === 0) {
+            queue.push(targetId);
+          }
+        });
+      }
+
+      // Handle cycles - assign remaining nodes average rank
+      const avgRank = rank.size > 0
+        ? Math.floor([...rank.values()].reduce((a, b) => a + b, 0) / rank.size)
+        : 0;
+      nodes.forEach((node, id) => {
+        if (!rank.has(id)) {
+          rank.set(id, avgRank);
+        }
+        node.layerIndex = rank.get(id);
+      });
+    }
+
+    // Use Dagre for graph-based layout (like Mermaid does)
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({
+      rankdir: 'TB',        // Top to bottom
+      nodesep: isComplex ? 180 : 120,   // More horizontal spacing
+      ranksep: isComplex ? 180 : 130,   // More vertical spacing between layers
+      marginx: 120,
+      marginy: 100,
+      ranker: 'network-simplex' // Best for complex multi-path graphs
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    // Detect separate entry clusters (nodes with no incoming edges)
+    const inDegree = new Map();
+    nodes.forEach((_, id) => inDegree.set(id, 0));
+    edges.forEach((edge) => {
+      if (inDegree.has(edge.target)) {
+        inDegree.set(edge.target, inDegree.get(edge.target) + 1);
+      }
+    });
+    const entryClusters = [];
+    nodes.forEach((node, id) => {
+      if (inDegree.get(id) === 0) {
+        entryClusters.push(id);
+      }
+    });
+
+    // Add nodes to dagre graph with rank constraints
+    nodes.forEach((node) => {
+      g.setNode(node.id, {
+        label: node.label,
+        width: Math.max(node.width, 180), // Wider minimum width
+        height: NODE_HEIGHT,
+        // Use layer index for rank constraint
+        rank: node.layerIndex
+      });
+    });
+
+    // Identify feedback edges (edges that go "backwards" - like responses back to frontend)
+    const feedbackEdges = new Set();
+    edges.forEach((edge) => {
+      const srcNode = nodes.get(edge.source);
+      const tgtNode = nodes.get(edge.target);
+      // Feedback if: target is an entry point AND source is not an entry point
+      // OR if layer index goes backwards
+      if (srcNode && tgtNode) {
+        const isToEntry = entryClusters.includes(edge.target) && !entryClusters.includes(edge.source);
+        const isBackwards = srcNode.layerIndex > tgtNode.layerIndex;
+        if (isToEntry || isBackwards) {
+          feedbackEdges.add(edge.id);
+        }
+      }
+    });
+
+    // Add edges to dagre graph with appropriate weights
+    const addedEdges = new Set();
+    edges.forEach((edge) => {
+      const edgeKey = `${edge.source}-${edge.target}`;
+      const reverseKey = `${edge.target}-${edge.source}`;
+      if (!addedEdges.has(edgeKey) && !addedEdges.has(reverseKey) &&
+          nodes.has(edge.source) && nodes.has(edge.target)) {
+        const isFeedback = feedbackEdges.has(edge.id);
+        // Feedback edges: low weight, short minlen (don't affect layout much)
+        // Normal edges: higher weight, longer minlen (drive the hierarchy)
+        g.setEdge(edge.source, edge.target, {
+          weight: isFeedback ? 0.5 : 3,
+          minlen: isFeedback ? 1 : 2
+        });
+        addedEdges.add(edgeKey);
+      }
+    });
+
+    // Run dagre layout
+    dagre.layout(g);
+
+    // Apply dagre-computed positions to nodes
+    g.nodes().forEach((nodeId) => {
+      const node = nodes.get(nodeId);
+      const dagreNode = g.node(nodeId);
+      if (node && dagreNode) {
+        node.x = dagreNode.x;
+        node.y = dagreNode.y;
+      }
+    });
+
+    // Handle orphan nodes (no connections) - layout them by group first, then by layer
+    const connectedNodeIds = new Set();
+    edges.forEach((edge) => {
+      connectedNodeIds.add(edge.source);
+      connectedNodeIds.add(edge.target);
+    });
+
+    // Find max Y of connected nodes for positioning orphans below
+    let maxConnectedY = 0;
+    let maxConnectedX = 0;
+    nodes.forEach((node) => {
+      if (connectedNodeIds.has(node.id)) {
+        maxConnectedY = Math.max(maxConnectedY, node.y + NODE_HEIGHT / 2);
+        maxConnectedX = Math.max(maxConnectedX, node.x + (node.width || NODE_WIDTH) / 2);
+      }
+    });
+
+    // Separate orphans by group membership
+    const orphansByGroup = new Map(); // group name -> nodes
+    const ungroupedOrphans = []; // orphans without group
+
+    nodes.forEach((node) => {
+      if (!connectedNodeIds.has(node.id)) {
+        if (node.group) {
+          if (!orphansByGroup.has(node.group)) {
+            orphansByGroup.set(node.group, []);
+          }
+          orphansByGroup.get(node.group).push(node);
+        } else {
+          ungroupedOrphans.push(node);
+        }
+      }
+    });
+
+    // Position ungrouped orphans in a row at their layer Y position
+    if (ungroupedOrphans.length > 0) {
+      // Group by layer
+      const orphansByLayer = new Map();
+      ungroupedOrphans.forEach(node => {
+        const layer = node.layerIndex || 0;
+        if (!orphansByLayer.has(layer)) orphansByLayer.set(layer, []);
+        orphansByLayer.get(layer).push(node);
+      });
+
+      // Find Y positions for each layer from connected nodes
+      const layerYPositions = new Map();
+      nodes.forEach((node) => {
+        if (connectedNodeIds.has(node.id) && !node.group) {
+          const layer = node.layerIndex || 0;
+          if (!layerYPositions.has(layer)) {
+            layerYPositions.set(layer, node.y);
+          }
+        }
+      });
+
+      let startX = maxConnectedX + 100;
+      orphansByLayer.forEach((orphans, layer) => {
+        const yPos = layerYPositions.get(layer) || (100 + layer * 150);
+        orphans.forEach((node, idx) => {
+          node.x = startX + idx * ((node.width || NODE_WIDTH) + 60);
+          node.y = yPos;
+        });
+      });
+    }
+
+    // Position grouped orphans - each group gets its own block
+    let groupStartY = maxConnectedY + 100;
+    const groupGap = 50; // Gap between groups
+
+    // Sort groups by their order in groupDefs
+    const sortedGroups = [...groupDefs.keys()];
+
+    sortedGroups.forEach((groupName) => {
+      const groupOrphans = orphansByGroup.get(groupName);
+      if (!groupOrphans || groupOrphans.length === 0) return;
+
+      // Find if any nodes in this group are connected (positioned by dagre)
+      const connectedInGroup = [];
+      const orphansInGroup = [];
+
+      groupDefs.get(groupName).nodes.forEach(nodeId => {
+        const node = nodes.get(nodeId);
+        if (node) {
+          if (connectedNodeIds.has(nodeId)) {
+            connectedInGroup.push(node);
+          } else {
+            orphansInGroup.push(node);
+          }
+        }
+      });
+
+      if (connectedInGroup.length > 0) {
+        // Position orphans next to connected nodes in the same group
+        let groupMaxX = 0;
+        let groupAvgY = 0;
+        connectedInGroup.forEach(node => {
+          groupMaxX = Math.max(groupMaxX, node.x + (node.width || NODE_WIDTH) / 2);
+          groupAvgY += node.y;
+        });
+        groupAvgY /= connectedInGroup.length;
+
+        // Position orphans to the right of connected nodes
+        orphansInGroup.forEach((node, idx) => {
+          node.x = groupMaxX + 80 + idx * ((node.width || NODE_WIDTH) + 60);
+          node.y = groupAvgY;
+        });
+      } else {
+        // All nodes in group are orphans - position them as a block
+        // Layout nodes in rows (max 3 per row)
+        const nodesPerRow = 3;
+        const rowHeight = NODE_HEIGHT + 40;
+        const colWidth = 200;
+
+        orphansInGroup.forEach((node, idx) => {
+          const row = Math.floor(idx / nodesPerRow);
+          const col = idx % nodesPerRow;
+          node.x = 150 + col * colWidth;
+          node.y = groupStartY + row * rowHeight;
+        });
+
+        // Update groupStartY for next group
+        const numRows = Math.ceil(orphansInGroup.length / nodesPerRow);
+        groupStartY += numRows * rowHeight + groupGap + 40;
+      }
+    });
+
+    // Calculate group bounds from node positions
+    // Process groups in reverse depth order (children first, then parents)
+    const calculatedGroups = [];
+    const groupBounds = new Map(); // group name -> { minX, minY, maxX, maxY }
+    const padding = 30; // Padding around group nodes
+    const nestedPadding = 15; // Extra padding for parent groups around children
+
+    // Get group depth (how many ancestors)
+    const getGroupDepth = (groupName) => {
+      let depth = 0;
+      let current = groupName;
+      while (current) {
+        const def = groupDefs.get(current);
+        if (def && def.parent) {
+          depth++;
+          current = def.parent;
+        } else {
+          break;
+        }
+      }
+      return depth;
+    };
+
+    // Sort groups by depth (deepest first)
+    const sortedGroupNames = [...groupDefs.keys()].sort((a, b) => getGroupDepth(b) - getGroupDepth(a));
+
+    // Calculate bounds for each group (children first, so parents can include them)
+    sortedGroupNames.forEach(groupName => {
+      const groupDef = groupDefs.get(groupName);
+      if (!groupDef || groupDef.nodes.length === 0) return;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      // Include direct nodes (not in child groups)
+      groupDef.nodes.forEach(nodeId => {
+        const node = nodes.get(nodeId);
+        if (node) {
+          // Check if this node is in a child group (skip if so, as child group bounds will include it)
+          const nodeGroups = nodeToGroups.get(nodeId) || [];
+          const isInChildGroup = nodeGroups.some(g => g !== groupName && groupDef.children.includes(g));
+          if (isInChildGroup) return;
+
+          const nodeWidth = node.width || NODE_WIDTH;
+          const nodeHeight = NODE_HEIGHT;
+          minX = Math.min(minX, node.x - nodeWidth / 2);
+          minY = Math.min(minY, node.y - nodeHeight / 2);
+          maxX = Math.max(maxX, node.x + nodeWidth / 2);
+          maxY = Math.max(maxY, node.y + nodeHeight / 2);
+        }
+      });
+
+      // Include child group bounds
+      groupDef.children.forEach(childName => {
+        const childBounds = groupBounds.get(childName);
+        if (childBounds) {
+          minX = Math.min(minX, childBounds.minX - nestedPadding);
+          minY = Math.min(minY, childBounds.minY - nestedPadding);
+          maxX = Math.max(maxX, childBounds.maxX + nestedPadding);
+          maxY = Math.max(maxY, childBounds.maxY + nestedPadding);
+        }
+      });
+
+      if (minX !== Infinity) {
+        // Store bounds for parent calculation
+        groupBounds.set(groupName, {
+          minX: minX - padding,
+          minY: minY - padding - 20,
+          maxX: maxX + padding,
+          maxY: maxY + padding
+        });
+
+        const bounds = groupBounds.get(groupName);
+        calculatedGroups.push({
+          id: `group-${groupName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+          name: groupName,
+          x: bounds.minX,
+          y: bounds.minY,
+          width: bounds.maxX - bounds.minX,
+          height: bounds.maxY - bounds.minY,
+          color: groupColors[groupDef.colorIndex % groupColors.length],
+          depth: getGroupDepth(groupName),
+          parent: groupDef.parent
         });
       }
     });
-    return { nodes: Array.from(nodes.values()), edges };
+
+    // Sort so parent groups render first (behind children)
+    calculatedGroups.sort((a, b) => a.depth - b.depth);
+
+    // Prevent sibling group overlaps (only for groups without parent or same parent)
+    const groupsByParent = new Map();
+    calculatedGroups.forEach(group => {
+      const parent = group.parent || '__root__';
+      if (!groupsByParent.has(parent)) groupsByParent.set(parent, []);
+      groupsByParent.get(parent).push(group);
+    });
+
+    groupsByParent.forEach((siblings) => {
+      siblings.sort((a, b) => a.y - b.y);
+      for (let i = 1; i < siblings.length; i++) {
+        const prevGroup = siblings[i - 1];
+        const currGroup = siblings[i];
+        const prevBottom = prevGroup.y + prevGroup.height;
+
+        if (currGroup.y < prevBottom + 20) {
+          // Shift current group and its nodes down
+          const shiftY = prevBottom + 20 - currGroup.y;
+          currGroup.y += shiftY;
+
+          // Shift all nodes in this group
+          const groupDef = groupDefs.get(currGroup.name);
+          if (groupDef) {
+            groupDef.nodes.forEach(nodeId => {
+              const node = nodes.get(nodeId);
+              if (node) node.y += shiftY;
+            });
+          }
+        }
+      }
+    });
+
+    return { nodes: Array.from(nodes.values()), edges, groups: calculatedGroups };
   },
 
   flowchart: (text) => {
     const nodes = new Map(), edges = [], nodeOrder = [];
 
     // Helper to parse node: (type) label or just label
+    // Also handles edge labels after : (returns them separately)
     const parseNode = (part) => {
       part = part.trim();
+
+      // First, check if there's an edge label (after :) - but be careful not to split URLs or time formats
+      // Edge label is typically at the end, after the node definition
+      let edgeLabel = '';
+      let nodeDefinition = part;
+
+      // Look for ": edge label" pattern - the colon followed by space and label at the end
+      // This pattern: (type) NodeLabel: EdgeLabel  OR  NodeLabel: EdgeLabel
+      const edgeLabelMatch = part.match(/^(.+?):\s+([^:]+)$/);
+      if (edgeLabelMatch) {
+        nodeDefinition = edgeLabelMatch[1].trim();
+        edgeLabel = edgeLabelMatch[2].trim();
+      }
+
+      // Now parse the node definition (without edge label)
       // Try to match (type) label - allow multi-word in parens
-      const match = part.match(/^\(([^)]+)\)\s*(.*)$/);
+      const match = nodeDefinition.match(/^\(([^)]+)\)\s*(.*)$/);
       if (match) {
         const inParens = match[1].trim();
         const afterParens = match[2].trim();
         // Check if it's the bad pattern: (Label) Label (duplicate)
         if (afterParens && inParens.toLowerCase() === afterParens.toLowerCase()) {
-          return { type: 'process', label: afterParens };
+          return { type: 'process', label: afterParens, edgeLabel };
         }
         // Check if type is a valid keyword
         const validTypes = ['start', 'end', 'process', 'decision', 'io', 'data', 'database', 'document'];
         if (validTypes.includes(inParens.toLowerCase())) {
-          return { type: inParens.toLowerCase(), label: afterParens || inParens };
+          return { type: inParens.toLowerCase(), label: afterParens || inParens, edgeLabel };
         }
         // Otherwise, it's a bad format - use content as label
-        return { type: 'process', label: afterParens || inParens };
+        return { type: 'process', label: afterParens || inParens, edgeLabel };
       }
-      return { type: 'process', label: part };
+      return { type: 'process', label: nodeDefinition, edgeLabel };
     };
+
+    // Parse direction directive: direction: LR, direction: TB, etc.
+    let direction = 'TB'; // Default: top-to-bottom
+    const dirMatch = text.match(/^direction:\s*(TB|LR|RL|BT)/im);
+    if (dirMatch) {
+      direction = dirMatch[1].toUpperCase();
+    }
+    const isHorizontal = direction === 'LR' || direction === 'RL';
 
     // First pass: collect all nodes and edges
     text.split('\n').forEach(line => {
       line = line.trim();
-      if (!line || line.startsWith('#')) return;
+      if (!line || line.startsWith('#') || line.match(/^direction:/i)) return;
       const parts = line.split(/\s*->\s*/);
       parts.forEach((part, i) => {
-        const { type, label } = parseNode(part);
+        const { type, label, edgeLabel } = parseNode(part);
         const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
         if (!nodes.has(id)) { nodes.set(id, { id, type, label, x: 0, y: 0 }); nodeOrder.push(id); }
         if (i > 0) {
           const { label: prevLabel } = parseNode(parts[i - 1]);
           const sourceId = prevLabel.toLowerCase().replace(/[^a-z0-9]/g, '_');
-          const edgeLabel = line.match(/->\s*\([^)]*\)\s*[^:]+:\s*(.+)$/)?.[1] || '';
+          // Use the edge label from the target node's parse result
           edges.push({ id: `e-${edges.length}`, source: sourceId, target: id, label: edgeLabel });
         }
       });
@@ -1634,50 +2565,74 @@ const Parsers = {
     const positioned = new Set();
     const depthColors = [COLORS.purple, COLORS.blue, COLORS.emerald, COLORS.orange, COLORS.pink, COLORS.cyan];
 
-    const positionNode = (id, x, y, branchOffset = 0, depth = 0) => {
+    const positionNode = (id, primaryPos, secondaryPos, branchOffset = 0, depth = 0) => {
       if (positioned.has(id)) return;
       const node = nodes.get(id);
       if (!node) return;
-      node.x = x + branchOffset;
-      node.y = y;
+
+      // For LR: primary = x (horizontal), secondary = y (vertical branch offset)
+      // For TB: primary = y (vertical), secondary = x (horizontal branch offset)
+      if (isHorizontal) {
+        node.x = primaryPos;
+        node.y = secondaryPos + branchOffset;
+      } else {
+        node.x = secondaryPos + branchOffset;
+        node.y = primaryPos;
+      }
+
       node.depth = depth;
       // Assign color based on depth
       node.color = depthColors[depth % depthColors.length];
       positioned.add(id);
       const children = outgoing.get(id) || [];
+      const nodeWidth = node.width || 130;
       const nodeHeight = node.height || 60;
-      const verticalGap = nodeHeight + 40;
+
+      // Gap in primary direction (forward movement)
+      const primaryGap = isHorizontal ? nodeWidth + 60 : nodeHeight + 40;
+      // Spacing in secondary direction (branching)
+      const branchSpacing = isHorizontal ? 100 : 200;
+
       if (children.length === 1) {
-        positionNode(children[0], x, y + verticalGap, branchOffset, depth + 1);
+        positionNode(children[0], primaryPos + primaryGap, secondaryPos, branchOffset, depth + 1);
       } else if (children.length >= 2) {
-        // Branch: spread children horizontally
-        const spacing = 200;
-        const totalWidth = (children.length - 1) * spacing;
+        // Branch: spread children in secondary direction
+        const totalSpread = (children.length - 1) * branchSpacing;
         children.forEach((childId, i) => {
-          const childNode = nodes.get(childId);
-          const childWidth = childNode?.width || 130;
-          const offset = -totalWidth / 2 + i * spacing;
-          positionNode(childId, x, y + verticalGap, offset, depth + 1);
+          const offset = -totalSpread / 2 + i * branchSpacing;
+          positionNode(childId, primaryPos + primaryGap, secondaryPos, offset, depth + 1);
         });
       }
     };
 
-    // Position from roots with more spacing
-    let startX = 400;
-    roots.forEach((rootId, i) => { positionNode(rootId, startX + i * 250, 100, 0, 0); });
+    // Position from roots
+    if (isHorizontal) {
+      // LR: Start from left, spread vertically
+      let startY = 200;
+      roots.forEach((rootId, i) => { positionNode(rootId, 100, startY + i * 150, 0, 0); });
+    } else {
+      // TB: Start from top, spread horizontally
+      let startX = 400;
+      roots.forEach((rootId, i) => { positionNode(rootId, 100, startX + i * 250, 0, 0); });
+    }
+
     // Position any unpositioned nodes (disconnected)
-    let unposY = 100;
+    let unposCounter = 100;
     nodeOrder.forEach(id => {
       if (!positioned.has(id)) {
         const node = nodes.get(id);
-        node.x = 700; node.y = unposY;
+        if (isHorizontal) {
+          node.x = 700; node.y = unposCounter;
+        } else {
+          node.x = 700; node.y = unposCounter;
+        }
         node.depth = 0;
         node.color = COLORS.gray;
-        unposY += (node.height || 60) + 40;
+        unposCounter += (isHorizontal ? 100 : (node.height || 60) + 40);
         positioned.add(id);
       }
     });
-    return { nodes: Array.from(nodes.values()), edges };
+    return { nodes: Array.from(nodes.values()), edges, direction };
   },
 
   stateMachine: (text) => {
@@ -1808,11 +2763,16 @@ const Parsers = {
   },
 
   sequence: (text) => {
-    const participants = [], messages = [];
+    const participants = [], messages = [], fragments = [], notes = [];
     let px = 80;
+    let fragmentStack = []; // Stack to track nested fragments
+    let messageIndex = 0;
+
     text.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
+
+      // Parse participant declaration
       const partMatch = line.match(/^participants?\s+(.+)/i);
       if (partMatch) {
         partMatch[1].split(',').forEach(p => {
@@ -1821,15 +2781,97 @@ const Parsers = {
         });
         return;
       }
+
+      // Parse loop/alt/opt block start
+      const blockMatch = line.match(/^(loop|alt|opt)\s+(.+)/i);
+      if (blockMatch) {
+        fragmentStack.push({
+          type: blockMatch[1].toLowerCase(),
+          label: blockMatch[2],
+          startIndex: messageIndex,
+          sections: [{ label: blockMatch[2], startIndex: messageIndex }]
+        });
+        return;
+      }
+
+      // Parse else block (for alt)
+      const elseMatch = line.match(/^else\s*(.*)/i);
+      if (elseMatch && fragmentStack.length > 0) {
+        const current = fragmentStack[fragmentStack.length - 1];
+        if (current.type === 'alt') {
+          current.sections.push({ label: elseMatch[1] || 'else', startIndex: messageIndex });
+        }
+        return;
+      }
+
+      // Parse end block
+      if (line.toLowerCase() === 'end') {
+        if (fragmentStack.length > 0) {
+          const fragment = fragmentStack.pop();
+          fragment.endIndex = messageIndex;
+          fragments.push(fragment);
+        }
+        return;
+      }
+
+      // Parse note: note left/right of Participant: text
+      const noteMatch = line.match(/^note\s+(left|right)\s+of\s+(\w+)\s*:\s*(.+)/i);
+      if (noteMatch) {
+        const position = noteMatch[1].toLowerCase();
+        const participantName = noteMatch[2];
+        const participantId = participantName.toLowerCase().replace(/\s/g, '_');
+        // Ensure participant exists
+        if (!participants.find(p => p.id === participantId)) {
+          participants.push({ id: participantId, label: participantName, x: px }); px += 160;
+        }
+        notes.push({
+          position,
+          participantId,
+          text: noteMatch[3],
+          atMessageIndex: messageIndex
+        });
+        return;
+      }
+
+      // Parse note over: note over A, B: text
+      const noteOverMatch = line.match(/^note\s+over\s+(.+?)\s*:\s*(.+)/i);
+      if (noteOverMatch) {
+        const participantNames = noteOverMatch[1].split(',').map(p => p.trim());
+        const participantIds = participantNames.map(name => {
+          const id = name.toLowerCase().replace(/\s/g, '_');
+          if (!participants.find(p => p.id === id)) {
+            participants.push({ id, label: name, x: px }); px += 160;
+          }
+          return id;
+        });
+        notes.push({
+          position: 'over',
+          participantIds,
+          text: noteOverMatch[2],
+          atMessageIndex: messageIndex
+        });
+        return;
+      }
+
+      // Parse message: A -> B: message or A --> B: message
       const msgMatch = line.match(/^(\w+)\s*(->|-->)\s*(\w+)(?::\s*(.+))?/);
       if (msgMatch) {
-        const fromId = msgMatch[1].toLowerCase(), toId = msgMatch[3].toLowerCase();
+        const fromId = msgMatch[1].toLowerCase().replace(/\s/g, '_');
+        const toId = msgMatch[3].toLowerCase().replace(/\s/g, '_');
         if (!participants.find(p => p.id === fromId)) { participants.push({ id: fromId, label: msgMatch[1], x: px }); px += 160; }
         if (!participants.find(p => p.id === toId)) { participants.push({ id: toId, label: msgMatch[3], x: px }); px += 160; }
-        messages.push({ from: fromId, to: toId, label: msgMatch[4] || '', isReturn: msgMatch[2] === '-->' });
+        messages.push({
+          from: fromId,
+          to: toId,
+          label: msgMatch[4] || '',
+          isReturn: msgMatch[2] === '-->',
+          index: messageIndex
+        });
+        messageIndex++;
       }
     });
-    return { participants, messages };
+
+    return { participants, messages, fragments, notes };
   },
 
   orgChart: (text) => {
@@ -2523,6 +3565,225 @@ const Parsers = {
     });
     if (current) requirements.push(current);
     return { requirements, traces };
+  },
+
+  sankey: (text) => {
+    const nodes = new Map(), links = [];
+    text.split('\n').forEach((line, i) => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+      // Parse: Source -> Target: Value or Source -> Target
+      const match = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(\d+(?:\.\d+)?))?$/);
+      if (match) {
+        const source = match[1].trim(), target = match[2].trim(), value = parseFloat(match[3]) || 10;
+        const sourceId = source.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const targetId = target.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        if (!nodes.has(sourceId)) nodes.set(sourceId, { id: sourceId, label: source });
+        if (!nodes.has(targetId)) nodes.set(targetId, { id: targetId, label: target });
+        links.push({ id: `link-${i}`, source: sourceId, target: targetId, value });
+      }
+    });
+
+    // Calculate node positions - layer nodes from left to right based on flow
+    const nodesArray = Array.from(nodes.values());
+    const outgoing = new Map(), incoming = new Map();
+    links.forEach(l => {
+      if (!outgoing.has(l.source)) outgoing.set(l.source, []);
+      outgoing.get(l.source).push(l.target);
+      if (!incoming.has(l.target)) incoming.set(l.target, []);
+      incoming.get(l.target).push(l.source);
+    });
+
+    // Find layers (nodes with no incoming = layer 0)
+    const layers = new Map();
+    const assignLayer = (id, layer) => {
+      const current = layers.get(id);
+      if (current !== undefined && current >= layer) return;
+      layers.set(id, layer);
+      (outgoing.get(id) || []).forEach(t => assignLayer(t, layer + 1));
+    };
+    nodesArray.filter(n => !incoming.has(n.id) || incoming.get(n.id).length === 0)
+      .forEach(n => assignLayer(n.id, 0));
+    nodesArray.forEach(n => { if (!layers.has(n.id)) layers.set(n.id, 0); });
+
+    // Group by layer and position
+    const maxLayer = Math.max(...layers.values(), 0);
+    const layerGroups = new Map();
+    nodesArray.forEach(n => {
+      const layer = layers.get(n.id) || 0;
+      if (!layerGroups.has(layer)) layerGroups.set(layer, []);
+      layerGroups.get(layer).push(n);
+    });
+
+    // Calculate node values (sum of outgoing or incoming)
+    nodesArray.forEach(n => {
+      const outVal = links.filter(l => l.source === n.id).reduce((s, l) => s + l.value, 0);
+      const inVal = links.filter(l => l.target === n.id).reduce((s, l) => s + l.value, 0);
+      n.value = Math.max(outVal, inVal, 10);
+    });
+
+    // Position nodes
+    const width = 800, height = 500, padding = 60;
+    const layerWidth = (width - padding * 2) / (maxLayer + 1 || 1);
+
+    for (let layer = 0; layer <= maxLayer; layer++) {
+      const group = layerGroups.get(layer) || [];
+      const totalHeight = group.reduce((s, n) => s + Math.max(30, n.value * 2), 0) + (group.length - 1) * 20;
+      let y = (height - totalHeight) / 2;
+      group.forEach(n => {
+        n.x = padding + layer * layerWidth;
+        n.y = y;
+        n.height = Math.max(30, n.value * 2);
+        n.layer = layer;
+        y += n.height + 20;
+      });
+    }
+
+    // Calculate link paths
+    links.forEach(link => {
+      const sourceNode = nodes.get(link.source);
+      const targetNode = nodes.get(link.target);
+      if (sourceNode && targetNode) {
+        link.sourceY = sourceNode.y + sourceNode.height / 2;
+        link.targetY = targetNode.y + targetNode.height / 2;
+        link.thickness = Math.max(4, link.value * 1.5);
+      }
+    });
+
+    return { nodes: nodesArray, links };
+  },
+
+  // Swimlane parser for process flows with roles/responsibilities
+  swimlane: (text) => {
+    const lanes = [], nodes = [], edges = [];
+    let currentLane = null;
+    let nodeId = 0;
+
+    text.split('\n').forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+
+      // Lane definition: [Lane Name] or lane: Name
+      const laneMatch = line.match(/^\[(.+?)\]$/) || line.match(/^lane:\s*(.+)$/i);
+      if (laneMatch) {
+        currentLane = { id: `lane-${lanes.length}`, name: laneMatch[1].trim(), nodes: [] };
+        lanes.push(currentLane);
+        return;
+      }
+
+      // Node with type: (type) Label or just Label
+      const nodeMatch = line.match(/^\((\w+)\)\s*(.+?)(?:\s*->\s*(.+))?$/) || line.match(/^(.+?)\s*->\s*(.+)$/);
+      if (nodeMatch) {
+        let type, label, targetPart;
+        if (nodeMatch[1] && nodeMatch[2] && line.startsWith('(')) {
+          type = nodeMatch[1].toLowerCase();
+          label = nodeMatch[2].trim();
+          targetPart = nodeMatch[3];
+        } else {
+          type = 'process';
+          label = nodeMatch[1].trim();
+          targetPart = nodeMatch[2];
+        }
+
+        // Map node types
+        const typeMap = {
+          start: 'start', end: 'end', decision: 'diamond', diamond: 'diamond',
+          process: 'rect', task: 'rect', rect: 'rect', action: 'rect',
+          document: 'document', doc: 'document', data: 'parallelogram', io: 'parallelogram'
+        };
+
+        const id = `n${nodeId++}`;
+        const node = {
+          id,
+          label,
+          type: typeMap[type] || 'rect',
+          lane: currentLane?.id || null
+        };
+        nodes.push(node);
+        if (currentLane) currentLane.nodes.push(id);
+
+        // Handle edge if present
+        if (targetPart) {
+          const targets = targetPart.split(',').map(t => t.trim());
+          targets.forEach(target => {
+            // Check if target has a label: Node: EdgeLabel
+            const edgeLabelMatch = target.match(/^(.+?):\s*(.+)$/);
+            const targetLabel = edgeLabelMatch ? edgeLabelMatch[1].trim() : target;
+            const edgeLabel = edgeLabelMatch ? edgeLabelMatch[2].trim() : '';
+
+            edges.push({
+              id: `e${edges.length}`,
+              source: id,
+              targetLabel,
+              label: edgeLabel
+            });
+          });
+        }
+      } else if (currentLane && line) {
+        // Simple node without arrow
+        const simpleMatch = line.match(/^\((\w+)\)\s*(.+)$/) || [null, 'process', line];
+        const type = simpleMatch[1] || 'process';
+        const label = simpleMatch[2] || line;
+
+        const typeMap = {
+          start: 'start', end: 'end', decision: 'diamond', diamond: 'diamond',
+          process: 'rect', task: 'rect', rect: 'rect', action: 'rect'
+        };
+
+        const id = `n${nodeId++}`;
+        nodes.push({
+          id,
+          label,
+          type: typeMap[type.toLowerCase()] || 'rect',
+          lane: currentLane.id
+        });
+        currentLane.nodes.push(id);
+      }
+    });
+
+    // Resolve edge targets by label
+    edges.forEach(edge => {
+      const targetNode = nodes.find(n => n.label.toLowerCase() === edge.targetLabel.toLowerCase());
+      if (targetNode) {
+        edge.target = targetNode.id;
+      }
+    });
+
+    // Filter valid edges
+    const validEdges = edges.filter(e => e.target);
+
+    // Position nodes within lanes
+    const laneHeight = 120;
+    const nodeWidth = 140, nodeHeight = 50;
+
+    lanes.forEach((lane, laneIdx) => {
+      lane.y = laneIdx * laneHeight;
+      lane.height = laneHeight;
+
+      const laneNodes = nodes.filter(n => n.lane === lane.id);
+      laneNodes.forEach((node, idx) => {
+        node.x = 180 + idx * (nodeWidth + 60);
+        node.y = lane.y + (laneHeight - nodeHeight) / 2;
+        node.width = nodeWidth;
+        node.height = nodeHeight;
+      });
+    });
+
+    // Handle nodes without lanes
+    const unassignedNodes = nodes.filter(n => !n.lane);
+    if (unassignedNodes.length > 0) {
+      const defaultLane = { id: 'default', name: 'General', nodes: [], y: lanes.length * laneHeight, height: laneHeight };
+      lanes.push(defaultLane);
+      unassignedNodes.forEach((node, idx) => {
+        node.lane = 'default';
+        node.x = 180 + idx * (nodeWidth + 60);
+        node.y = defaultLane.y + (laneHeight - nodeHeight) / 2;
+        node.width = nodeWidth;
+        node.height = nodeHeight;
+      });
+    }
+
+    return { lanes, nodes, edges: validEdges };
   }
 };
 
@@ -2531,7 +3792,7 @@ const Parsers = {
 // ============================================
 
 // Mind Map with draggable nodes
-function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function MindMapDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 100, y: 0 });
   const [collapsed, setCollapsed] = useState(new Set());
 
@@ -2660,7 +3921,7 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${30 * canvas.zoom}px ${30 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
-            {layout.edges.map(e => { const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target); if (!src || !tgt) return null; const path = getBezier(src, tgt); return (<g key={e.id}><path d={path} fill="none" stroke={e.color} strokeWidth={6} strokeOpacity={0.1} strokeLinecap="round" /><path d={path} fill="none" stroke={e.color} strokeWidth={3} strokeOpacity={0.25} strokeLinecap="round" /><path d={path} fill="none" stroke={e.color} strokeWidth={2} strokeOpacity={0.8} strokeLinecap="round" /></g>); })}
+            {layout.edges.map(e => { const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target); if (!src || !tgt) return null; const path = getBezier(src, tgt); const strokeColor = sketchMode ? SKETCH_COLORS.stroke : e.color; return (<g key={e.id}>{!sketchMode && <path d={path} fill="none" stroke={strokeColor} strokeWidth={6} strokeOpacity={0.1} strokeLinecap="round" />}{!sketchMode && <path d={path} fill="none" stroke={strokeColor} strokeWidth={3} strokeOpacity={0.25} strokeLinecap="round" />}<path d={path} fill="none" stroke={strokeColor} strokeWidth={sketchMode ? 2.5 : 2} strokeOpacity={sketchMode ? 1 : 0.8} strokeLinecap="round" /></g>); })}
             {/* Selection box */}
             {canvas.isSelecting && canvas.selectionBox && (
               <rect
@@ -2688,13 +3949,14 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
                 style={{
                   position: 'absolute', left: pos.x, top: pos.y - 19, width: node.width, height: 38,
-                  background: node.level === 0 ? `linear-gradient(135deg, ${nodeColor}, ${nodeColor}dd)` : getNodeGradient(nodeColor),
-                  border: `2px solid ${nodeColor}`,
+                  background: sketchMode ? SKETCH_COLORS.fill : (node.level === 0 ? `linear-gradient(135deg, ${nodeColor}, ${nodeColor}dd)` : getNodeGradient(nodeColor)),
+                  border: sketchMode ? `2px solid ${SKETCH_COLORS.stroke}` : `2px solid ${nodeColor}`,
                   borderRadius: node.level === 0 ? 19 : 10,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   cursor: isDragging ? 'grabbing' : 'grab',
-                  boxShadow: getNodeShadow(nodeColor, isDragging, isSelected),
-                  transition: isDragging ? 'none' : 'box-shadow 0.2s, background 0.2s'
+                  boxShadow: getNodeShadow(nodeColor, isDragging, isSelected, sketchMode),
+                  transition: isDragging ? 'none' : 'box-shadow 0.2s, background 0.2s',
+                  fontFamily: getSketchFont(sketchMode),
                 }}
               >
                 <EditableNodeLabel
@@ -2703,7 +3965,7 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                   onChange={canvas.setEditValue}
                   onFinish={handleLabelEditFinish}
                   onCancel={canvas.cancelEditing}
-                  style={{ color: node.level === 0 ? '#fff' : theme.textPrimary, fontSize: node.level === 0 ? 14 : 13, fontWeight: node.level === 0 ? 700 : 500 }}
+                  style={{ color: sketchMode ? SKETCH_COLORS.stroke : (node.level === 0 ? '#fff' : theme.textPrimary), fontSize: sketchMode ? getSketchFontSize(node.level === 0 ? 14 : 13) : (node.level === 0 ? 14 : 13), fontWeight: node.level === 0 ? 700 : 500 }}
                 />
                 {node.hasChildren && (
                   <div
@@ -2751,21 +4013,63 @@ function MindMapDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
 }
 
 // Architecture with draggable nodes
-function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 0, y: 30 });
+  const { nodes = [], edges = [], groups = [] } = data;
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
-  const getShape = (type) => { if (['database', 'cache', 'storage'].includes(type)) return 'cylinder'; if (['gateway', 'loadbalancer'].includes(type)) return 'hexagon'; return 'rect'; };
+  const getShape = (node) => {
+    // Use shape from node style if defined, otherwise determine by type
+    if (node.shape === 'cylinder' || ['database', 'cache', 'storage', 'db', 'redis', 's3', 'blob'].includes(node.type)) return 'cylinder';
+    if (node.shape === 'hexagon' || ['gateway', 'loadbalancer', 'lb', 'api', 'proxy', 'cdn', 'firewall'].includes(node.type)) return 'hexagon';
+    return 'rect';
+  };
+
+  // Calculate content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    if (!nodes || nodes.length === 0) return { x: 0, y: 0, width: 800, height: 600 };
+    const nodeWidth = 150, nodeHeight = 90;
+    const positions = nodes.map(n => {
+      // Get position from canvas state or use default
+      const pos = canvas.nodePositions?.[n.id];
+      return pos || { x: n.x || 0, y: n.y || 0 };
+    });
+    if (positions.length === 0) return { x: 0, y: 0, width: 800, height: 600 };
+    const xs = positions.map(p => p.x);
+    const ys = positions.map(p => p.y);
+    const minX = Math.min(...xs) - nodeWidth;
+    const maxX = Math.max(...xs) + nodeWidth;
+    const minY = Math.min(...ys) - nodeHeight;
+    const maxY = Math.max(...ys) + nodeHeight;
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [nodes, canvas.nodePositions]);
+
+  // Get edge style properties
+  const getEdgeStyleProps = (edge) => {
+    const style = edge.style || 'normal';
+    switch (style) {
+      case 'dotted':
+        return { strokeDasharray: '4,4', strokeWidth: 2 };
+      case 'dashed':
+        return { strokeDasharray: '8,4', strokeWidth: 2 };
+      case 'thick':
+        return { strokeDasharray: 'none', strokeWidth: 4 };
+      case 'async':
+        return { strokeDasharray: '2,2', strokeWidth: 2 };
+      default:
+        return { strokeDasharray: '6,4', strokeWidth: 2 };
+    }
+  };
 
   // Handle label edit complete
   const handleLabelEditFinish = useCallback(() => {
     const result = canvas.finishEditing();
     if (result.nodeId && result.newValue && onLabelChange) {
-      const node = data.nodes.find(n => n.id === result.nodeId);
+      const node = nodes.find(n => n.id === result.nodeId);
       if (node && node.label !== result.newValue) {
         onLabelChange(result.nodeId, node.label, result.newValue);
       }
     }
-  }, [canvas, data.nodes, onLabelChange]);
+  }, [canvas, nodes, onLabelChange]);
 
   // Handle keyboard shortcuts (Delete, Copy, Paste)
   useEffect(() => {
@@ -2781,7 +4085,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
       }
       if (metaKey && e.key.toLowerCase() === 'c' && canvas.selectedNodes.size > 0) {
         e.preventDefault();
-        canvas.copySelectedNodes(data.nodes);
+        canvas.copySelectedNodes(nodes);
         return;
       }
       if (metaKey && e.key.toLowerCase() === 'v' && canvas.clipboard && onPasteNodes) {
@@ -2793,15 +4097,15 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canvas, data.nodes, onDeleteNodes, onPasteNodes]);
+  }, [canvas, nodes, onDeleteNodes, onPasteNodes]);
 
   // Handle selection box completion
   useEffect(() => {
     if (!canvas.isSelecting && canvas.selectionBox) {
-      const nodeIds = canvas.getNodesInSelectionBox(data.nodes, canvas.selectionBox);
+      const nodeIds = canvas.getNodesInSelectionBox(nodes, canvas.selectionBox);
       if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
     }
-  }, [canvas.isSelecting, canvas.selectionBox, data.nodes, canvas]);
+  }, [canvas.isSelecting, canvas.selectionBox, nodes, canvas]);
 
   // Click on canvas to clear selection
   const handleCanvasClick = useCallback((e) => {
@@ -2816,29 +4120,62 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="arch-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
+          <defs>
+            <marker id="arch-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
+            <marker id="arch-arr-thick" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto"><polygon points="0 0, 12 5, 0 10" fill={COLORS.purple} /></marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
-            {data.edges.map(e => {
-              const src = data.nodes.find(n => n.id === e.source), tgt = data.nodes.find(n => n.id === e.target);
+            {/* Render groups/boundaries first (background) */}
+            {groups.map(group => (
+              <g key={group.id}>
+                <rect
+                  x={group.x}
+                  y={group.y}
+                  width={group.width}
+                  height={group.height}
+                  fill={`${group.color}08`}
+                  stroke={group.color}
+                  strokeWidth={2}
+                  strokeDasharray="8,4"
+                  rx={12}
+                  opacity={0.8}
+                />
+                <text
+                  x={group.x + 16}
+                  y={group.y + 24}
+                  fill={group.color}
+                  fontSize="14"
+                  fontWeight="600"
+                  fontFamily="system-ui"
+                >
+                  {group.name}
+                </text>
+              </g>
+            ))}
+            {/* Render edges */}
+            {edges.map(e => {
+              const src = nodes.find(n => n.id === e.source), tgt = nodes.find(n => n.id === e.target);
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
               const x1 = sp.x + (dx / dist) * 55, y1 = sp.y + (dy / dist) * 45;
               const x2 = tp.x - (dx / dist) * 55, y2 = tp.y - (dy / dist) * 45;
               const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
-              // Use curved path instead of straight line
-              const path = getCurvedPath(x1, y1, x2, y2);
+              // Use curved path (or sketchy path in sketch mode)
+              const path = sketchMode ? getSketchyPath(x1, y1, x2, y2, true) : getCurvedPath(x1, y1, x2, y2);
+              const strokeColor = sketchMode ? SKETCH_COLORS.stroke : COLORS.purple;
+              const edgeProps = getEdgeStyleProps(e);
               return (
                 <g key={e.id}>
-                  {/* Outer glow layer */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" />
-                  {/* Inner glow layer */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
-                  {/* Main stroke with dashes */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" markerEnd="url(#arch-arr)" opacity={0.8} strokeLinecap="round" />
+                  {/* Outer glow layer - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={strokeColor} strokeWidth={edgeProps.strokeWidth * 4} strokeOpacity={0.08} strokeLinecap="round" />}
+                  {/* Inner glow layer - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={strokeColor} strokeWidth={edgeProps.strokeWidth * 2} strokeOpacity={0.2} strokeLinecap="round" />}
+                  {/* Main stroke */}
+                  <path d={path} fill="none" stroke={strokeColor} strokeWidth={sketchMode ? 2.5 : edgeProps.strokeWidth} strokeDasharray={edgeProps.strokeDasharray} markerEnd={sketchMode ? '' : (e.style === 'thick' ? 'url(#arch-arr-thick)' : 'url(#arch-arr)')} opacity={sketchMode ? 1 : 0.8} strokeLinecap="round" />
                   {e.label && (
                     <>
-                      <rect x={midX - 45} y={midY - 10} width={90} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
+                      <rect x={midX - Math.max(e.label.length * 4, 40)} y={midY - 10} width={Math.max(e.label.length * 8, 80)} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
                       <text x={midX} y={midY + 4} textAnchor="middle" fill={theme.textPrimary} fontSize="10" fontFamily="system-ui" fontWeight="500">{e.label}</text>
                     </>
                   )}
@@ -2858,15 +4195,16 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
-          {data.nodes.map(node => {
+          {nodes.map(node => {
             const pos = getPos(node);
-            const shape = getShape(node.type);
+            const shape = getShape(node);
             const nodeColor = canvas.nodeColors[node.id] || node.color;
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: 75, background: getNodeGradient(nodeColor), border: `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(nodeColor, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s' };
-            if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = 85; }
+            const hasDescription = node.description && node.description.length > 0;
+            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: hasDescription ? 90 : 75, background: getNodeGradient(nodeColor, sketchMode), border: sketchMode ? `2px solid ${SKETCH_COLORS.stroke}` : `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(nodeColor, isDragging, isSelected, sketchMode), transition: isDragging ? 'none' : 'box-shadow 0.2s', fontFamily: getSketchFont(sketchMode) };
+            if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = hasDescription ? 100 : 85; }
             if (shape === 'hexagon') { style.clipPath = 'polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%)'; style.width = 145; }
             return (
               <div
@@ -2875,22 +4213,28 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
                 onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)}
                 onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)}
                 style={style}
+                title={node.description || ''}
               >
-                <div style={{ fontSize: '1.5rem', marginBottom: 4 }}>{canvas.nodeIcons[node.id] || node.icon}</div>
+                <div style={{ fontSize: '1.5rem', marginBottom: 2 }}>{canvas.nodeIcons[node.id] || node.icon}</div>
                 <EditableNodeLabel
                   isEditing={isEditing}
                   value={isEditing ? canvas.editValue : node.label}
                   onChange={canvas.setEditValue}
                   onFinish={handleLabelEditFinish}
                   onCancel={canvas.cancelEditing}
-                  style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}
+                  style={{ fontSize: sketchMode ? '1rem' : '0.8rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }}
                 />
+                {hasDescription && (
+                  <div style={{ fontSize: '0.65rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 2, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {node.description}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => {}} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
@@ -2923,7 +4267,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, onLabelChange, onDelet
 }
 
 // User Journey with draggable nodes - supports both legacy and section-based formats
-function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   // Check if this is the new section-based format
   if (data?.format === 'sections') {
     return <JourneySectionDiagram data={data} theme={theme} />;
@@ -3080,9 +4424,9 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDelete
                 <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 50, top: pos.y - 50, width: 100, height: 100, borderRadius: '50%', background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                   <span style={{ fontSize: 24 }}>{node.icon}</span>
                   {canvas.editingNode === node.id ? (
-                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }} />
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, marginTop: 4 }} />
                   ) : (
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                    <span style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, marginTop: 4 }}>{node.label}</span>
                   )}
                 </div>
               );
@@ -3093,9 +4437,9 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, onLabelChange, onDelete
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
                 <span style={{ fontSize: 22 }}>{node.icon}</span>
                 {canvas.editingNode === node.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? 14 : 11, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, marginTop: 4 }} />
                 ) : (
-                  <span style={{ fontSize: 11, fontWeight: 600, color: theme.textPrimary, marginTop: 4 }}>{node.label}</span>
+                  <span style={{ fontSize: sketchMode ? 14 : 11, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, marginTop: 4 }}>{node.label}</span>
                 )}
               </div>
             );
@@ -3626,7 +4970,7 @@ function JourneySectionDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Flow Diagram with draggable nodes
-function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
+function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const styles = { start: { color: COLORS.green, icon: '▶' }, end: { color: COLORS.red, icon: '■' }, process: { color: COLORS.blue, icon: '⚙️' }, decision: { color: COLORS.orange, icon: '◇' }, action: { color: COLORS.blue, icon: '▹' }, io: { color: COLORS.purple, icon: '📦' }, default: { color: COLORS.purple, icon: '📦' } };
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
@@ -3936,7 +5280,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               if (pathType === 'straight') {
                 path = `M ${sx} ${sy} L ${tx} ${ty}`;
               } else if (pathType === 'step') {
-                // Orthogonal/step path with right angles
+                // Orthogonal/step path with right angles (sharp corners)
                 if (Math.abs(dx) > Math.abs(dy)) {
                   // More horizontal - go right first, then up/down
                   path = `M ${sx} ${sy} L ${midX} ${sy} L ${midX} ${ty} L ${tx} ${ty}`;
@@ -3944,9 +5288,22 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                   // More vertical - go down first, then left/right
                   path = `M ${sx} ${sy} L ${sx} ${midY} L ${tx} ${midY} L ${tx} ${ty}`;
                 }
+              } else if (pathType === 'rounded') {
+                // Orthogonal path with rounded corners (elbow with radius)
+                const radius = 12; // Corner radius
+                if (Math.abs(dx) > Math.abs(dy)) {
+                  // More horizontal - go right first, then up/down
+                  const dirY = ty > sy ? 1 : -1;
+                  path = `M ${sx} ${sy} L ${midX - radius} ${sy} Q ${midX} ${sy} ${midX} ${sy + dirY * radius} L ${midX} ${ty - dirY * radius} Q ${midX} ${ty} ${midX + radius * Math.sign(dx)} ${ty} L ${tx} ${ty}`;
+                } else {
+                  // More vertical - go down first, then left/right
+                  const dirX = tx > sx ? 1 : -1;
+                  path = `M ${sx} ${sy} L ${sx} ${midY - Math.sign(dy) * radius} Q ${sx} ${midY} ${sx + dirX * radius} ${midY} L ${tx - dirX * radius} ${midY} Q ${tx} ${midY} ${tx} ${midY + Math.sign(dy) * radius} L ${tx} ${ty}`;
+                }
               } else {
                 // Smooth curved (default) - use cubic bezier for smoother curves
-                path = getCurvedPath(sx, sy, tx, ty);
+                // In sketch mode, add hand-drawn wobble effect
+                path = sketchMode ? getSketchyPath(sx, sy, tx, ty, true) : getCurvedPath(sx, sy, tx, ty);
               }
               const isEditingThisEdge = canvas.editingEdge === e.id;
               const labelText = isEditingThisEdge ? canvas.edgeEditValue : (e.label || '');
@@ -3955,12 +5312,12 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                 <g key={e.id}>
                   {/* Invisible wider path for easier clicking */}
                   <path d={path} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); canvas.handleEdgeContextMenu(ev, e.id); }} />
-                  {/* Outer glow layer */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
-                  {/* Inner glow layer */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" style={{ pointerEvents: 'none' }} />
+                  {/* Outer glow layer - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" style={{ pointerEvents: 'none' }} />}
+                  {/* Inner glow layer - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" style={{ pointerEvents: 'none' }} />}
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd={edgeStyleProps.markerEnd} opacity={0.9} style={{ animation: edgeStyleProps.animation, pointerEvents: 'none' }} />
+                  <path d={path} fill="none" stroke={sketchMode ? SKETCH_COLORS.stroke : COLORS.purple} strokeWidth={sketchMode ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={edgeStyleProps.strokeDasharray} markerEnd={sketchMode ? '' : edgeStyleProps.markerEnd} opacity={0.9} style={{ animation: sketchMode ? 'none' : edgeStyleProps.animation, pointerEvents: 'none' }} />
                   {/* Edge label or edit input */}
                   {(labelText || isEditingThisEdge) && (
                     <g style={{ cursor: 'pointer' }} onDoubleClick={(ev) => { ev.stopPropagation(); canvas.handleEdgeDoubleClick(ev, e.id, e.label || ''); }}>
@@ -4111,13 +5468,15 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
               top: pos.y - nodeHeight / 2,
               width: nodeWidth,
               height: nodeHeight,
-              background: getNodeGradient(nodeColor), border: `2px solid ${nodeColor}`,
+              background: getNodeGradient(nodeColor, sketchMode),
+              border: sketchMode ? `2px solid ${SKETCH_COLORS.stroke}` : `2px solid ${nodeColor}`,
               borderRadius: borderRadius,
               clipPath: clipPath,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               cursor: isDragging ? 'grabbing' : isResizing ? 'nwse-resize' : 'grab',
-              boxShadow: getNodeShadow(nodeColor, isDragging, isSelected),
-              transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s, background 0.2s', touchAction: 'none'
+              boxShadow: getNodeShadow(nodeColor, isDragging, isSelected, sketchMode),
+              transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s, background 0.2s', touchAction: 'none',
+              fontFamily: getSketchFont(sketchMode),
             };
             if (isDiamond) { style.left = pos.x - 35; style.top = pos.y - 35; style.transform = 'rotate(45deg)'; style.borderRadius = 8; style.clipPath = undefined; }
             const isConnectionTarget = canvas.isConnecting && canvas.connectionTarget === node.id;
@@ -4150,7 +5509,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
                     onChange={canvas.setEditValue}
                     onFinish={handleLabelEditFinish}
                     onCancel={canvas.cancelEditing}
-                    style={{ fontSize: '0.8rem', fontWeight: 600, color: theme.textPrimary }}
+                    style={{ fontSize: sketchMode ? '1rem' : '0.8rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }}
                   />
                 </div>
                 {/* Right port - for starting connections (outgoing) */}
@@ -4350,7 +5709,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, onLabelChan
 }
 
 // ERD with draggable tables
-function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function ERDDiagram({ tables, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas();
   const layout = useMemo(() => {
     const cols = Math.min(3, Math.ceil(Math.sqrt(tables.length)));
@@ -4481,7 +5840,7 @@ function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes,
                       onChange={canvas.setEditValue}
                       onFinish={handleLabelEditFinish}
                       onCancel={canvas.cancelEditing}
-                      style={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}
+                      style={{ color: '#fff', fontWeight: 700, fontSize: sketchMode ? '1.1rem' : '0.95rem' }}
                     />
                   </span>
                 </div>
@@ -4532,7 +5891,7 @@ function ERDDiagram({ tables, theme = THEMES.dark, onLabelChange, onDeleteNodes,
 }
 
 // Network with draggable devices
-function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function NetworkDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas();
   const icons = { router: '📡', switch: '🔀', firewall: '🛡️', server: '🖥️', computer: '💻', cloud: '☁️', hub: '🔌' };
   const layout = useMemo(() => {
@@ -4668,7 +6027,7 @@ function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                   onChange={canvas.setEditValue}
                   onFinish={handleLabelEditFinish}
                   onCancel={canvas.cancelEditing}
-                  style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary }}
+                  style={{ fontSize: sketchMode ? '1rem' : '0.85rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }}
                 />
                 {device.ip && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, fontFamily: 'monospace', marginTop: 4 }}>{device.ip}</div>}
               </div>
@@ -4709,7 +6068,7 @@ function NetworkDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
 }
 
 // Class Diagram with draggable classes
-function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function ClassDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas();
   const { classes = [], relationships = [] } = data;
   const layout = useMemo(() => {
@@ -4867,7 +6226,7 @@ function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes,
                     onChange={canvas.setEditValue}
                     onFinish={handleLabelEditFinish}
                     onCancel={canvas.cancelEditing}
-                    style={{ color: theme.textPrimary, fontWeight: 700 }}
+                    style={{ color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, fontWeight: 700, fontSize: sketchMode ? '1rem' : 'inherit' }}
                   />
                 </div>
                 <div style={{ padding: '8px 14px', borderBottom: `1px solid ${theme.border}` }}>
@@ -4910,7 +6269,7 @@ function ClassDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes,
 }
 
 // Org Chart with draggable nodes
-function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function OrgChartDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 0, y: 50 });
   const layout = useMemo(() => {
     const { nodes, edges } = data;
@@ -4921,14 +6280,14 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
     const hasParent = new Set(edges.map(e => e.target));
     const root = nodes.find(n => !hasParent.has(n.id));
     if (!root) return { nodes, edges };
-    const getWidth = (id) => { const children = childrenMap[id] || []; return children.length === 0 ? 160 : Math.max(160, children.map(getWidth).reduce((s, w) => s + w + 30, -30)); };
+    const getWidth = (id) => { const children = childrenMap[id] || []; return children.length === 0 ? 180 : Math.max(180, children.map(getWidth).reduce((s, w) => s + w + 40, -40)); };
     const positioned = [];
     const positionNode = (id, x, y, level) => {
       const node = nodes.find(n => n.id === id);
       if (!node) return;
       const children = childrenMap[id] || [], width = getWidth(id);
       positioned.push({ ...node, defaultX: x, defaultY: y, level, color: [COLORS.purple, COLORS.blue, COLORS.green, COLORS.orange][Math.min(level, 3)] });
-      if (children.length) { let cx = x - width / 2; children.forEach(cid => { const cw = getWidth(cid); positionNode(cid, cx + cw / 2, y + 170, level + 1); cx += cw + 30; }); }
+      if (children.length) { let cx = x - width / 2; children.forEach(cid => { const cw = getWidth(cid); positionNode(cid, cx + cw / 2, y + 120, level + 1); cx += cw + 40; }); }
     };
     positionNode(root.id, getWidth(root.id) / 2 + 100, 80, 0);
     return { nodes: positioned, edges };
@@ -5007,16 +6366,16 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
               const src = layout.nodes.find(n => n.id === e.source), tgt = layout.nodes.find(n => n.id === e.target);
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
-              const sx = sp.x + 80, sy = sp.y + 70, tx = tp.x + 80, ty = tp.y, my = (sy + ty) / 2;
+              const sx = sp.x + 90, sy = sp.y + 60, tx = tp.x + 90, ty = tp.y, my = (sy + ty) / 2;
               const path = `M ${sx} ${sy} L ${sx} ${my} L ${tx} ${my} L ${tx} ${ty}`;
               return (
                 <g key={e.id}>
-                  {/* Outer glow */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" strokeLinejoin="round" />
-                  {/* Inner glow */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Outer glow - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={8} strokeOpacity={0.08} strokeLinecap="round" strokeLinejoin="round" />}
+                  {/* Inner glow - hidden in sketch mode */}
+                  {!sketchMode && <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" strokeLinejoin="round" />}
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="6,4" opacity={0.7} strokeLinecap="round" strokeLinejoin="round" />
+                  <path d={path} fill="none" stroke={sketchMode ? SKETCH_COLORS.stroke : COLORS.purple} strokeWidth={sketchMode ? 2.5 : 2} strokeDasharray="6,4" opacity={sketchMode ? 1 : 0.7} strokeLinecap="round" strokeLinejoin="round" />
                 </g>
               );
             })}
@@ -5032,13 +6391,13 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
             const isDragging = canvas.dragging === node.id;
             const isSelected = canvas.selectedNodes.has(node.id);
             return (
-              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 160, background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, padding: 12, textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x, top: pos.y, width: 180, background: getNodeGradient(node.color, sketchMode), border: sketchMode ? `2px solid ${SKETCH_COLORS.stroke}` : `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, padding: '10px 8px', textAlign: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected, sketchMode), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none', overflow: 'hidden', fontFamily: getSketchFont(sketchMode) }}>
                 {canvas.editingNode === node.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? '1.1rem' : '0.95rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }} />
                 ) : (
-                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</div>
+                  <div style={{ fontSize: sketchMode ? '1.1rem' : '0.95rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }}>{node.label}</div>
                 )}
-                {node.title && <div style={{ fontSize: '0.75rem', color: node.color, marginTop: 4 }}>{node.title}</div>}
+                {node.title && <div style={{ fontSize: sketchMode ? '0.9rem' : '0.75rem', color: sketchMode ? SKETCH_COLORS.accent : node.color, marginTop: 4 }}>{node.title}</div>}
               </div>
             );
           })}
@@ -5066,27 +6425,122 @@ function OrgChartDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNod
 }
 
 // Sequence (participants draggable horizontally)
-function SequenceDiagram({ data, theme = THEMES.dark }) {
-  const { participants, messages } = data;
+function SequenceDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
+  const { participants, messages, fragments = [], notes = [] } = data;
   const canvas = useInteractiveCanvas({ x: 30, y: 20 });
   const getPos = (p) => canvas.getNodePosition(p.id, p.x, 0);
+  const msgSpacing = 60;
+  const startY = 110;
 
   const contentBounds = useMemo(() => {
     if (!participants || participants.length === 0) return { x: 0, y: 0, width: 400, height: 300 };
     const xs = participants.map(p => p.x);
-    return { x: Math.min(...xs) - 60, y: 0, width: Math.max(...xs) - Math.min(...xs) + 200, height: 85 + messages.length * 60 + 80 };
+    return { x: Math.min(...xs) - 60, y: 0, width: Math.max(...xs) - Math.min(...xs) + 200, height: 85 + messages.length * msgSpacing + 80 };
   }, [participants, messages]);
+
+  // Get Y position for a message index
+  const getMsgY = (index) => startY + index * msgSpacing;
+
+  // Fragment colors
+  const fragmentColors = {
+    loop: COLORS.blue,
+    alt: COLORS.orange,
+    opt: COLORS.green
+  };
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, touchAction: 'none' }}>
       <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <svg width="100%" height="100%" style={{ position: 'absolute' }}>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* Render fragments (loop/alt/opt boxes) first as background */}
+            {fragments.map((frag, fi) => {
+              if (!frag || frag.startIndex === undefined) return null;
+
+              const fragColor = fragmentColors[frag.type] || COLORS.purple;
+
+              // Find messages that are inside this fragment
+              const fragMessages = messages.filter(m =>
+                m.index >= frag.startIndex && m.index < (frag.endIndex || frag.startIndex + 1)
+              );
+
+              if (fragMessages.length === 0) return null;
+
+              // Find participants involved in this fragment's messages
+              const involvedParticipantIds = new Set();
+              fragMessages.forEach(m => {
+                involvedParticipantIds.add(m.from);
+                involvedParticipantIds.add(m.to);
+              });
+
+              // Get X bounds based on involved participants only
+              const involvedParticipants = participants.filter(p => involvedParticipantIds.has(p.id));
+              if (involvedParticipants.length === 0) return null;
+
+              const involvedXs = involvedParticipants.map(p => getPos(p).x);
+              const minX = Math.min(...involvedXs) - 10;
+              const maxX = Math.max(...involvedXs) + 130;
+
+              // Calculate Y bounds based on actual message indices
+              const firstMsgIdx = Math.min(...fragMessages.map(m => m.index));
+              const lastMsgIdx = Math.max(...fragMessages.map(m => m.index));
+              const fragY = getMsgY(firstMsgIdx) - 35;
+              const fragHeight = (lastMsgIdx - firstMsgIdx + 1) * msgSpacing + 25;
+
+              return (
+                <g key={`frag-${fi}`}>
+                  {/* Fragment box */}
+                  <rect
+                    x={minX}
+                    y={fragY}
+                    width={maxX - minX}
+                    height={fragHeight}
+                    rx={6}
+                    fill={`${fragColor}08`}
+                    stroke={fragColor}
+                    strokeWidth={1.5}
+                    strokeDasharray="6,3"
+                    opacity={0.8}
+                  />
+                  {/* Fragment label */}
+                  <rect
+                    x={minX}
+                    y={fragY}
+                    width={50}
+                    height={18}
+                    fill={fragColor}
+                    rx={4}
+                  />
+                  <text
+                    x={minX + 25}
+                    y={fragY + 13}
+                    textAnchor="middle"
+                    fill="#fff"
+                    fontSize={9}
+                    fontWeight={700}
+                  >
+                    {frag.type}
+                  </text>
+                  {/* Fragment condition label */}
+                  <text
+                    x={minX + 55}
+                    y={fragY + 13}
+                    fill={fragColor}
+                    fontSize={9}
+                    fontWeight={600}
+                  >
+                    [{frag.label}]
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Participant lifelines and headers */}
             {participants.map((p, i) => {
               const pos = getPos(p);
               return (
                 <g key={p.id}>
-                  <line x1={pos.x + 60} y1={85} x2={pos.x + 60} y2={85 + messages.length * 60 + 40} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="4,4" opacity={0.4} />
+                  <line x1={pos.x + 60} y1={85} x2={pos.x + 60} y2={85 + messages.length * msgSpacing + 40} stroke={COLORS.purple} strokeWidth={2} strokeDasharray="4,4" opacity={0.4} />
                   <defs>
                     <linearGradient id={`seq-grad-${i}`} x1="0%" y1="0%" x2="100%" y2="100%">
                       <stop offset="0%" stopColor={BRANCH_COLORS[i % BRANCH_COLORS.length]} stopOpacity="0.35" />
@@ -5101,12 +6555,37 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+
+            {/* Messages */}
             {messages.map((msg, i) => {
               const from = participants.find(p => p.id === msg.from), to = participants.find(p => p.id === msg.to);
               if (!from || !to) return null;
               const fp = getPos(from), tp = getPos(to);
-              const y = 110 + i * 60, fromX = fp.x + 60, toX = tp.x + 60;
+              const y = getMsgY(i), fromX = fp.x + 60, toX = tp.x + 60;
               const msgColor = msg.isReturn ? theme.textSecondary : COLORS.purple;
+              const isSelfMessage = msg.from === msg.to;
+
+              if (isSelfMessage) {
+                // Self-referencing message (loop back to same participant)
+                const loopWidth = 40;
+                const loopHeight = 30;
+                return (
+                  <g key={`msg-${i}`}>
+                    <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msgColor} /></marker></defs>
+                    {/* Self-loop path */}
+                    <path
+                      d={`M ${fromX} ${y} L ${fromX + loopWidth} ${y} L ${fromX + loopWidth} ${y + loopHeight} L ${fromX + 8} ${y + loopHeight}`}
+                      stroke={msgColor}
+                      strokeWidth={2}
+                      fill="none"
+                      markerEnd={`url(#seq-arr-${i})`}
+                    />
+                    <rect x={fromX + loopWidth + 5} y={y - 10} width={Math.max(80, msg.label.length * 6)} height={18} rx={4} fill="rgba(0,0,0,0.85)" />
+                    <text x={fromX + loopWidth + 10} y={y + 3} fill={msgColor} fontSize={11}>{msg.label}</text>
+                  </g>
+                );
+              }
+
               return (
                 <g key={`msg-${i}`}>
                   <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msgColor} /></marker></defs>
@@ -5121,6 +6600,45 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
                 </g>
               );
             })}
+
+            {/* Notes */}
+            {notes.map((note, ni) => {
+              const participant = participants.find(p => p.id === note.participantId);
+              if (!participant) return null;
+              const pos = getPos(participant);
+              const noteY = getMsgY(note.atMessageIndex) - 15;
+              const noteX = note.position === 'right' ? pos.x + 130 : pos.x - 110;
+              const noteWidth = Math.max(100, note.text.length * 6 + 20);
+
+              return (
+                <g key={`note-${ni}`}>
+                  {/* Note background with fold */}
+                  <path
+                    d={`M ${noteX} ${noteY} L ${noteX + noteWidth - 10} ${noteY} L ${noteX + noteWidth} ${noteY + 10} L ${noteX + noteWidth} ${noteY + 40} L ${noteX} ${noteY + 40} Z`}
+                    fill="#fef3c7"
+                    stroke="#f59e0b"
+                    strokeWidth={1}
+                  />
+                  {/* Fold corner */}
+                  <path
+                    d={`M ${noteX + noteWidth - 10} ${noteY} L ${noteX + noteWidth - 10} ${noteY + 10} L ${noteX + noteWidth} ${noteY + 10}`}
+                    fill="#fde68a"
+                    stroke="#f59e0b"
+                    strokeWidth={1}
+                  />
+                  {/* Note text */}
+                  <text
+                    x={noteX + 8}
+                    y={noteY + 25}
+                    fill="#92400e"
+                    fontSize={11}
+                    fontWeight={500}
+                  >
+                    {note.text}
+                  </text>
+                </g>
+              );
+            })}
           </g>
         </svg>
       </div>
@@ -5130,7 +6648,7 @@ function SequenceDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Timeline with draggable events
-function TimelineDiagram({ events, theme = THEMES.dark }) {
+function TimelineDiagram({ events, theme = THEMES.dark, sketchMode = false }) {
   const canvas = useInteractiveCanvas({ x: 30, y: 0 });
   const getPos = (e) => canvas.getNodePosition(e.id, e.x, e.y);
 
@@ -5170,7 +6688,7 @@ function TimelineDiagram({ events, theme = THEMES.dark }) {
 }
 
 // Git Graph with draggable commits
-function GitGraphDiagram({ data, theme = THEMES.dark }) {
+function GitGraphDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const { commits, branches } = data;
   const canvas = useInteractiveCanvas({ x: 20, y: 20 });
   const getPos = (c) => canvas.getNodePosition(c.id, c.x, c.y);
@@ -5257,7 +6775,7 @@ function GitGraphDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Non-draggable diagrams (Gantt, Pie, Quadrant, Wireframe, Deployment, Simple Cards)
-function GanttDiagram({ tasks, theme = THEMES.dark }) {
+function GanttDiagram({ tasks, theme = THEMES.dark, sketchMode = false }) {
   const maxEnd = Math.max(...tasks.map(t => t.start + t.duration), 14);
   return (
     <div style={{ width: '100%', height: '100%', overflow: 'auto', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}`, padding: 20 }}>
@@ -5275,7 +6793,7 @@ function GanttDiagram({ tasks, theme = THEMES.dark }) {
   );
 }
 
-function PieChartDiagram({ data, theme = THEMES.dark }) {
+function PieChartDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   let angle = -90;
   const slices = data.map((slice, i) => {
@@ -5294,7 +6812,7 @@ function PieChartDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
-function QuadrantDiagram({ data, theme = THEMES.dark }) {
+function QuadrantDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const { config, points } = data;
   const canvas = useInteractiveCanvas({ x: 50, y: 20 });
   const size = 400, pad = 60, chart = size - pad * 2;
@@ -5331,7 +6849,7 @@ function QuadrantDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
-function DeploymentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function DeploymentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 30, y: 30 });
   const typeStyles = { cloud: { color: COLORS.sky, icon: '☁️' }, cluster: { color: COLORS.teal, icon: '🌐' }, container: { color: COLORS.cyan, icon: '📦' }, database: { color: COLORS.green, icon: '🗄️' }, storage: { color: COLORS.emerald, icon: '💾' }, device: { color: COLORS.pink, icon: '📱' }, server: { color: COLORS.violet, icon: '🖧' }, component: { color: COLORS.purple, icon: '⚙️' } };
   const layout = useMemo(() => {
@@ -5437,9 +6955,9 @@ function DeploymentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteN
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: node.hasChildren ? `1px solid ${node.color}30` : 'none' }}>
                   <span style={{ fontSize: '1.3rem' }}>{node.icon}</span>
                   {canvas.editingNode === node.id ? (
-                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }} />
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }} />
                   ) : (
-                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary }}>{node.label}</span>
+                    <span style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }}>{node.label}</span>
                   )}
                   <span style={{ fontSize: '0.6rem', color: node.color, marginLeft: 'auto', background: `${node.color}20`, padding: '3px 8px', borderRadius: 4 }}>«{node.type}»</span>
                 </div>
@@ -5469,7 +6987,7 @@ function DeploymentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteN
   );
 }
 
-function WireframeDiagram({ data, theme = THEMES.dark }) {
+function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const { elements, totalHeight } = data;
   
   const renderElement = (el) => {
@@ -5924,7 +7442,7 @@ function WireframeDiagram({ data, theme = THEMES.dark }) {
 }
 
 // Component Diagram with connections
-function ComponentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function ComponentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { components = [], connections = [] } = data;
 
@@ -6052,9 +7570,9 @@ function ComponentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNo
               <div key={comp.id} onClick={(e) => canvas.handleNodeClick(e, comp.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, comp.id, comp.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, comp.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, comp.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, comp.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 75, top: pos.y - 50, width: 150, height: 100, background: `${comp.style.color}15`, border: `2px solid ${isSelected ? COLORS.blue : comp.style.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${comp.style.color}50` : `0 4px 20px ${comp.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>{comp.style.icon}</div>
                 {canvas.editingNode === comp.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? '1rem' : '0.85rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }} />
                 ) : (
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center', padding: '0 8px' }}>{comp.label}</div>
+                  <div style={{ fontSize: sketchMode ? '1rem' : '0.85rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center', padding: '0 8px' }}>{comp.label}</div>
                 )}
               </div>
             );
@@ -6083,7 +7601,7 @@ function ComponentDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNo
 }
 
 // C4 Diagram with relationships
-function C4Diagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { elements = [], relationships = [] } = data;
 
@@ -6217,9 +7735,9 @@ function C4Diagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, on
               <div key={el.id} onClick={(e) => canvas.handleNodeClick(e, el.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, el.id, el.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, el.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 85, top: pos.y - 60, width: 170, height: 120, background: `${el.style.color}15`, border: `2px solid ${isSelected ? COLORS.blue : el.style.color}`, borderRadius: isPerson ? '50% 50% 12px 12px' : el.style.shape === 'cylinder' ? '50% / 15%' : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${el.style.color}50` : `0 4px 20px ${el.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 6 }}>{el.style.icon}</div>
                 {canvas.editingNode === el.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }} />
                 ) : (
-                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
+                  <div style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
                 )}
                 {el.description && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 4 }}>{el.description}</div>}
               </div>
@@ -6249,7 +7767,7 @@ function C4Diagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, on
 }
 
 // Requirements Diagram with traceability
-function RequirementDiagram({ data, theme = THEMES.dark }) {
+function RequirementDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { requirements = [], traces = [] } = data;
 
@@ -6328,8 +7846,526 @@ function RequirementDiagram({ data, theme = THEMES.dark }) {
   );
 }
 
+// Sankey Diagram for flow/resource visualization
+function SankeyDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { nodes = [], links = [] } = data;
+
+  const nodeWidth = 20;
+  const layerColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.green, COLORS.amber, COLORS.orange];
+
+  // Calculate content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    if (!nodes.length) return { x: 0, y: 0, width: 800, height: 500 };
+    const xs = nodes.map(n => n.x);
+    const ys = nodes.map(n => n.y);
+    const heights = nodes.map(n => n.height || 30);
+    return {
+      x: Math.min(...xs) - 40,
+      y: Math.min(...ys) - 40,
+      width: Math.max(...xs) - Math.min(...xs) + nodeWidth + 80,
+      height: Math.max(...ys.map((y, i) => y + heights[i])) - Math.min(...ys) + 80
+    };
+  }, [nodes]);
+
+  // Get node position with drag support
+  const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
+
+  // Generate curved path for links
+  const getLinkPath = (link) => {
+    const sourceNode = nodes.find(n => n.id === link.source);
+    const targetNode = nodes.find(n => n.id === link.target);
+    if (!sourceNode || !targetNode) return '';
+
+    const sp = getPos(sourceNode);
+    const tp = getPos(targetNode);
+
+    const x0 = sp.x + nodeWidth;
+    const y0 = sp.y + (sourceNode.height || 30) / 2;
+    const x1 = tp.x;
+    const y1 = tp.y + (targetNode.height || 30) / 2;
+
+    // Bezier curve control points
+    const midX = (x0 + x1) / 2;
+
+    return `M ${x0} ${y0} C ${midX} ${y0}, ${midX} ${y1}, ${x1} ${y1}`;
+  };
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      height: '100%',
+      overflow: 'hidden',
+      background: theme.canvasBg,
+      borderRadius: 12,
+      border: `1px solid ${theme.border}`,
+      touchAction: 'none'
+    }}>
+      <div
+        ref={canvas.canvasRef}
+        className="canvas-bg"
+        onMouseDown={canvas.handleCanvasMouseDown}
+        onMouseMove={canvas.handleMouseMove}
+        onMouseUp={canvas.handleMouseUp}
+        onMouseLeave={canvas.handleMouseUp}
+        onTouchStart={canvas.handleTouchStart}
+        onTouchMove={canvas.handleTouchMove}
+        onTouchEnd={canvas.handleTouchEnd}
+        onWheel={canvas.handleWheel}
+        style={{
+          width: '100%',
+          height: '100%',
+          cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab',
+          touchAction: 'none'
+        }}
+      >
+        {/* Grid background */}
+        <div className="canvas-bg" style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`,
+          backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`,
+          backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`,
+          pointerEvents: 'none'
+        }} />
+
+        {/* SVG for links */}
+        <svg
+          width="100%"
+          height="100%"
+          style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}
+        >
+          <defs>
+            {/* Gradient for each link */}
+            {links.map((link, i) => {
+              const sourceNode = nodes.find(n => n.id === link.source);
+              const targetNode = nodes.find(n => n.id === link.target);
+              const sourceColor = layerColors[(sourceNode?.layer || 0) % layerColors.length];
+              const targetColor = layerColors[(targetNode?.layer || 0) % layerColors.length];
+              return (
+                <linearGradient key={`grad-${i}`} id={`sankey-gradient-${i}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor={sourceColor} stopOpacity="0.6" />
+                  <stop offset="100%" stopColor={targetColor} stopOpacity="0.6" />
+                </linearGradient>
+              );
+            })}
+          </defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* Links */}
+            {links.map((link, i) => {
+              const path = getLinkPath(link);
+              const thickness = link.thickness || 8;
+              return (
+                <g key={link.id}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={`url(#sankey-gradient-${i})`}
+                    strokeWidth={thickness}
+                    strokeLinecap="round"
+                    opacity={0.7}
+                  />
+                  {/* Value label on hover */}
+                  <title>{`${link.value}`}</title>
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        {/* Nodes */}
+        <div style={{
+          position: 'absolute',
+          transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`,
+          transformOrigin: '0 0'
+        }}>
+          {nodes.map((node, i) => {
+            const pos = getPos(node);
+            const isDragging = canvas.dragging === node.id;
+            const color = layerColors[(node.layer || 0) % layerColors.length];
+            const height = node.height || 30;
+
+            return (
+              <div
+                key={node.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)}
+                style={{
+                  position: 'absolute',
+                  left: pos.x,
+                  top: pos.y,
+                  width: nodeWidth,
+                  height: height,
+                  background: sketchMode ? SKETCH_COLORS.stroke : color,
+                  borderRadius: 3,
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  boxShadow: isDragging ? `0 0 20px ${color}80` : `0 2px 10px ${color}40`,
+                  transition: isDragging ? 'none' : 'box-shadow 0.2s',
+                  touchAction: 'none'
+                }}
+              >
+                {/* Label to the right */}
+                <div style={{
+                  position: 'absolute',
+                  left: nodeWidth + 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  whiteSpace: 'nowrap',
+                  fontSize: '0.8rem',
+                  fontWeight: 500,
+                  fontFamily: sketchMode ? "'Caveat', cursive" : 'inherit',
+                  color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary
+                }}>
+                  {node.label}
+                </div>
+                {/* Value indicator */}
+                <div style={{
+                  position: 'absolute',
+                  left: nodeWidth + 8,
+                  top: '50%',
+                  transform: 'translateY(50%)',
+                  fontSize: '0.65rem',
+                  color: theme.textSecondary
+                }}>
+                  {node.value}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <CanvasControls
+        onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))}
+        onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))}
+        onFit={() => canvas.fitToView(contentBounds)}
+        onReset={canvas.resetView}
+        zoom={canvas.zoom}
+      />
+    </div>
+  );
+}
+
+// Swimlane Diagram for process flows with roles/responsibilities
+function SwimlaneDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 50 });
+  const { lanes = [], nodes = [], edges = [] } = data;
+
+  const laneColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.green, COLORS.amber];
+
+  // Calculate content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    if (!nodes.length) return { x: 0, y: 0, width: 800, height: 400 };
+    const xs = nodes.map(n => n.x);
+    const ys = nodes.map(n => n.y);
+    const widths = nodes.map(n => n.width || 140);
+    const heights = nodes.map(n => n.height || 50);
+    return {
+      x: Math.min(...xs) - 200,
+      y: Math.min(...ys) - 40,
+      width: Math.max(...xs.map((x, i) => x + widths[i])) - Math.min(...xs) + 280,
+      height: Math.max(...ys.map((y, i) => y + heights[i])) - Math.min(...ys) + 80
+    };
+  }, [nodes]);
+
+  // Get node position with drag support
+  const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
+
+  // Get edge path between nodes
+  const getEdgePath = (edge) => {
+    const sourceNode = nodes.find(n => n.id === edge.source);
+    const targetNode = nodes.find(n => n.id === edge.target);
+    if (!sourceNode || !targetNode) return '';
+
+    const sp = getPos(sourceNode);
+    const tp = getPos(targetNode);
+
+    const sw = sourceNode.width || 140;
+    const sh = sourceNode.height || 50;
+    const tw = targetNode.width || 140;
+    const th = targetNode.height || 50;
+
+    // Calculate center points
+    const sx = sp.x + sw / 2;
+    const sy = sp.y + sh / 2;
+    const tx = tp.x + tw / 2;
+    const ty = tp.y + th / 2;
+
+    // Determine best exit/entry points
+    let x1, y1, x2, y2;
+    const dx = tx - sx;
+    const dy = ty - sy;
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // Horizontal connection
+      x1 = dx > 0 ? sp.x + sw : sp.x;
+      y1 = sy;
+      x2 = dx > 0 ? tp.x : tp.x + tw;
+      y2 = ty;
+    } else {
+      // Vertical connection
+      x1 = sx;
+      y1 = dy > 0 ? sp.y + sh : sp.y;
+      x2 = tx;
+      y2 = dy > 0 ? tp.y : tp.y + th;
+    }
+
+    // Create elbow connector
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+    } else {
+      return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+    }
+  };
+
+  // Get node shape based on type
+  const getNodeShape = (type) => {
+    switch (type) {
+      case 'start':
+        return { borderRadius: '50%', width: 30, height: 30, background: COLORS.green };
+      case 'end':
+        return { borderRadius: '50%', width: 30, height: 30, background: COLORS.red, border: '3px solid' };
+      case 'diamond':
+        return { borderRadius: 4, transform: 'rotate(45deg)', width: 40, height: 40 };
+      case 'document':
+        return { borderRadius: '0 0 8px 8px', clipPath: 'polygon(0 0, 100% 0, 100% 85%, 50% 100%, 0 85%)' };
+      case 'parallelogram':
+        return { transform: 'skewX(-10deg)' };
+      default:
+        return { borderRadius: 8 };
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      height: '100%',
+      overflow: 'hidden',
+      background: theme.canvasBg,
+      borderRadius: 12,
+      border: `1px solid ${theme.border}`,
+      touchAction: 'none'
+    }}>
+      <div
+        ref={canvas.canvasRef}
+        className="canvas-bg"
+        onMouseDown={canvas.handleCanvasMouseDown}
+        onMouseMove={canvas.handleMouseMove}
+        onMouseUp={canvas.handleMouseUp}
+        onMouseLeave={canvas.handleMouseUp}
+        onTouchStart={canvas.handleTouchStart}
+        onTouchMove={canvas.handleTouchMove}
+        onTouchEnd={canvas.handleTouchEnd}
+        onWheel={canvas.handleWheel}
+        style={{
+          width: '100%',
+          height: '100%',
+          cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab',
+          touchAction: 'none'
+        }}
+      >
+        {/* Grid background */}
+        <div className="canvas-bg" style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`,
+          backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`,
+          backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`,
+          pointerEvents: 'none'
+        }} />
+
+        {/* SVG for edges and lanes */}
+        <svg
+          width="100%"
+          height="100%"
+          style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}
+        >
+          <defs>
+            <marker id="swimlane-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill={theme.textSecondary} />
+            </marker>
+          </defs>
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* Lane backgrounds */}
+            {lanes.map((lane, i) => {
+              const laneWidth = 1200;
+              const color = laneColors[i % laneColors.length];
+              return (
+                <g key={lane.id}>
+                  <rect
+                    x={0}
+                    y={lane.y}
+                    width={laneWidth}
+                    height={lane.height}
+                    fill={color}
+                    fillOpacity={0.05}
+                    stroke={color}
+                    strokeOpacity={0.3}
+                    strokeWidth={1}
+                    rx={4}
+                  />
+                  {/* Lane separator line */}
+                  {i < lanes.length - 1 && (
+                    <line
+                      x1={0}
+                      y1={lane.y + lane.height}
+                      x2={laneWidth}
+                      y2={lane.y + lane.height}
+                      stroke={theme.border}
+                      strokeWidth={1}
+                      strokeDasharray="5,5"
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Edges */}
+            {edges.map((edge) => {
+              const path = getEdgePath(edge);
+              return (
+                <g key={edge.id}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={sketchMode ? SKETCH_COLORS.stroke : theme.textSecondary}
+                    strokeWidth={2}
+                    markerEnd="url(#swimlane-arrow)"
+                    opacity={0.7}
+                  />
+                  {/* Edge label */}
+                  {edge.label && (
+                    <text
+                      x={0}
+                      y={0}
+                      fill={theme.textSecondary}
+                      fontSize="0.7rem"
+                      fontFamily={sketchMode ? "'Caveat', cursive" : 'inherit'}
+                      textAnchor="middle"
+                    >
+                      <textPath href={`#edge-path-${edge.id}`} startOffset="50%">
+                        {edge.label}
+                      </textPath>
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        {/* Lane labels and nodes */}
+        <div style={{
+          position: 'absolute',
+          transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`,
+          transformOrigin: '0 0'
+        }}>
+          {/* Lane headers */}
+          {lanes.map((lane, i) => {
+            const color = laneColors[i % laneColors.length];
+            return (
+              <div
+                key={`lane-header-${lane.id}`}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: lane.y,
+                  width: 160,
+                  height: lane.height,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 16px',
+                  background: `${color}15`,
+                  borderRight: `2px solid ${color}50`,
+                  borderRadius: '4px 0 0 4px'
+                }}
+              >
+                <span style={{
+                  color: sketchMode ? SKETCH_COLORS.stroke : color,
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  fontFamily: sketchMode ? "'Caveat', cursive" : 'inherit',
+                  textAlign: 'center',
+                  wordBreak: 'break-word'
+                }}>
+                  {lane.name}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* Nodes */}
+          {nodes.map((node) => {
+            const pos = getPos(node);
+            const isDragging = canvas.dragging === node.id;
+            const lane = lanes.find(l => l.id === node.lane);
+            const laneIndex = lanes.indexOf(lane);
+            const color = laneColors[laneIndex % laneColors.length] || COLORS.purple;
+            const shapeStyle = getNodeShape(node.type);
+            const isSpecialShape = ['start', 'end', 'diamond'].includes(node.type);
+
+            return (
+              <div
+                key={node.id}
+                onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)}
+                onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)}
+                style={{
+                  position: 'absolute',
+                  left: pos.x,
+                  top: pos.y,
+                  width: isSpecialShape ? shapeStyle.width : (node.width || 140),
+                  height: isSpecialShape ? shapeStyle.height : (node.height || 50),
+                  background: shapeStyle.background || (sketchMode ? SKETCH_COLORS.bg : `${color}20`),
+                  border: `2px solid ${sketchMode ? SKETCH_COLORS.stroke : color}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  boxShadow: isDragging ? `0 0 20px ${color}50` : `0 2px 8px rgba(0,0,0,0.2)`,
+                  transition: isDragging ? 'none' : 'box-shadow 0.2s',
+                  touchAction: 'none',
+                  ...shapeStyle
+                }}
+              >
+                {!isSpecialShape && (
+                  <span style={{
+                    color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary,
+                    fontSize: '0.8rem',
+                    fontWeight: 500,
+                    fontFamily: sketchMode ? "'Caveat', cursive" : 'inherit',
+                    textAlign: 'center',
+                    padding: '4px 8px',
+                    wordBreak: 'break-word',
+                    transform: node.type === 'diamond' ? 'rotate(-45deg)' : 'none'
+                  }}>
+                    {node.label}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <CanvasControls
+        onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))}
+        onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))}
+        onFit={() => canvas.fitToView(contentBounds)}
+        onReset={canvas.resetView}
+        zoom={canvas.zoom}
+      />
+    </div>
+  );
+}
+
 // Use Case Diagram with actors, ovals, and connections
-function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function UseCaseDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
   const { actors = [], useCases = [], relationships = [] } = data;
 
@@ -6568,9 +8604,9 @@ function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
                 </div>
                 <div style={{ marginTop: 10, padding: '4px 12px', background: 'rgba(0,0,0,0.4)', borderRadius: 12, backdropFilter: 'blur(8px)' }}>
                   {canvas.editingNode === actor.id ? (
-                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }} />
+                    <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }} />
                   ) : (
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.textPrimary }}>{actor.label}</span>
+                    <span style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary }}>{actor.label}</span>
                   )}
                 </div>
               </div>
@@ -6585,9 +8621,9 @@ function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
             return (
               <div key={uc.id} onClick={(e) => canvas.handleNodeClick(e, uc.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, uc.id, uc.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, uc.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, uc.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, uc.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 80, top: pos.y - 35, width: 160, height: 70, background: `linear-gradient(135deg, ${COLORS.blue}25, ${COLORS.purple}15)`, border: `1.5px solid ${isSelected ? COLORS.blue : 'rgba(14, 165, 233, 0.5)'}`, borderRadius: 35, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(COLORS.blue, isDragging, isSelected), backdropFilter: 'blur(8px)', transition: isDragging ? 'none' : 'box-shadow 0.2s, transform 0.2s', transform: isDragging ? 'scale(1.03)' : 'scale(1)', touchAction: 'none' }}>
                 {canvas.editingNode === uc.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center' }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 500, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }} />
                 ) : (
-                  <span style={{ fontSize: 12, fontWeight: 500, color: theme.textPrimary, textAlign: 'center', padding: '0 12px', lineHeight: 1.3 }}>{uc.label}</span>
+                  <span style={{ fontSize: sketchMode ? 14 : 12, fontWeight: 500, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center', padding: '0 12px', lineHeight: 1.3 }}>{uc.label}</span>
                 )}
               </div>
             );
@@ -6619,7 +8655,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark, onLabelChange, onDeleteNode
 // MAIN COMPONENT
 // ============================================
 
-export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
+export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
   const t = THEMES[theme] || THEMES.dark;
   const parsed = useMemo(() => {
     if (data) return data;
@@ -6648,6 +8684,8 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelCh
       case 'component': return p.component(source);
       case 'c4': return p.c4(source);
       case 'requirement': return p.requirement(source);
+      case 'sankey': return p.sankey(source);
+      case 'swimlane': return p.swimlane(source);
       default: return null;
     }
   }, [type, data, source]);
@@ -6655,28 +8693,30 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', onLabelCh
   if (!parsed) return <div style={{ padding: 20, color: '#888' }}>No data</div>;
 
   switch (type) {
-    case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
-    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
-    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
-    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'timeline': return <TimelineDiagram events={parsed} theme={t} />;
-    case 'sequence': return <SequenceDiagram data={parsed} theme={t} />;
-    case 'orgchart': return <OrgChartDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'network': return <NetworkDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'gantt': return <GanttDiagram tasks={parsed} theme={t} />;
-    case 'deployment': return <DeploymentDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'pie': return <PieChartDiagram data={parsed} theme={t} />;
-    case 'quadrant': return <QuadrantDiagram data={parsed} theme={t} />;
-    case 'git': return <GitGraphDiagram data={parsed} theme={t} />;
-    case 'wireframe': return <WireframeDiagram data={parsed} theme={t} />;
-    case 'class': return <ClassDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'usecase': return <UseCaseDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'component': return <ComponentDiagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'c4': return <C4Diagram data={parsed} theme={t} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'requirement': return <RequirementDiagram data={parsed} theme={t} />;
+    case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
+    case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
+    case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
+    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'timeline': return <TimelineDiagram events={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'sequence': return <SequenceDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'orgchart': return <OrgChartDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'network': return <NetworkDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'gantt': return <GanttDiagram tasks={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'deployment': return <DeploymentDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'pie': return <PieChartDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'quadrant': return <QuadrantDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'git': return <GitGraphDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'wireframe': return <WireframeDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'class': return <ClassDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'usecase': return <UseCaseDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'component': return <ComponentDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'c4': return <C4Diagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'requirement': return <RequirementDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'sankey': return <SankeyDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
+    case 'swimlane': return <SwimlaneDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     default: return <div style={{ padding: 20, color: '#888' }}>Unknown: {type}</div>;
   }
 }
@@ -7163,7 +9203,40 @@ function MermaidExportModal({ isOpen, onClose, diagramType, diagramSource }) {
 const DEMOS = {
   journey: { title: '🚶 Journey', source: `[actor] User\n[page] Landing Page\n[action] Sign Up\n[email] Verify Email\n[page] Onboarding\n[page] Dashboard\n[notification] Welcome!\n\nUser -Visit-> Landing Page\nLanding Page -Click CTA-> Sign Up\nSign Up -Submit-> Verify Email\nVerify Email -Confirm-> Onboarding\nOnboarding -Complete-> Dashboard\nDashboard -> Welcome!` },
   mindmap: { title: '🧠 Mind Map', source: `Project\n  Goals\n    Revenue\n    Growth\n  Features\n    Auth\n    Dashboard\n  Stack\n    React\n    Node` },
-  architecture: { title: '🏗️ Architecture', source: `[clients] Web, Mobile\n[gateway] API Gateway\n[services] Auth, Users, Orders\n[data] PostgreSQL, Redis\n\nWeb -> API Gateway\nMobile -> API Gateway\nAPI Gateway -> Auth\nAPI Gateway -> Users\nAuth -> Redis\nUsers -> PostgreSQL` },
+  architecture: { title: '🏗️ Architecture', source: `# Modern Cloud Architecture
+[users] Web App, Mobile App
+[cdn] CloudFront CDN
+[lb] Load Balancer
+[gateway] API Gateway
+
+boundary "Backend Services" {
+[microservices] Auth Service, User Service, Order Service
+[worker] Background Worker
+}
+
+boundary "Data Layer" {
+[database] PostgreSQL: Primary DB
+[cache] Redis: Session cache
+[queue] Kafka: Event stream
+}
+
+[monitoring] Prometheus, Grafana
+
+# Connections
+Web App -> CloudFront CDN
+Mobile App -> Load Balancer
+CloudFront CDN -> Load Balancer
+Load Balancer -> API Gateway
+API Gateway -> Auth Service
+API Gateway -> User Service
+API Gateway -> Order Service
+Auth Service --> Redis: sessions
+User Service -> PostgreSQL
+Order Service -> PostgreSQL
+Order Service ->> Kafka: events
+Background Worker -> Kafka
+Prometheus --> Auth Service: metrics
+Prometheus --> User Service: metrics` },
   erd: { title: '📊 ERD', source: `CREATE TABLE users (id UUID PRIMARY KEY, email VARCHAR(255), name VARCHAR(100));\nCREATE TABLE posts (id UUID PRIMARY KEY, title VARCHAR(200), user_id UUID REFERENCES users(id));` },
   sequence: { title: '🔄 Sequence', source: `participant Client, API, DB\n\nClient -> API: Request\nAPI -> DB: Query\nDB --> API: Result\nAPI --> Client: Response` },
   flowchart: { title: '📈 Flowchart', source: `(start) Start\nStart -> (process) Process\nProcess -> (decision) Valid?\nValid? -> (end) Done\nValid? -> (io) Error` },
@@ -7228,7 +9301,9 @@ const DEMOS = {
   usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)\n(View Reports)\n\nCustomer -> Browse Products\nCustomer -> Checkout\nAdmin -> Manage Inventory\nAdmin -> View Reports` },
   component: { title: '📦 Component', source: `[service] Frontend\n[api] API Gateway\n[service] Auth Service\n[database] Database\n[cache] Redis Cache\n\nFrontend --> API Gateway\nAPI Gateway --> Auth Service\nAPI Gateway --> Database\nAuth Service --> Redis Cache` },
   c4: { title: '🏛️ C4', source: `[person] User: App customer\n[system] WebApp: Main application\n[container] API: REST Backend\n[database] DB: PostgreSQL\n[external] Email: SendGrid\n\nUser -> WebApp: Uses\nWebApp -> API: Calls\nAPI -> DB: Reads/Writes\nAPI -> Email: Sends` },
-  requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: critical\n}\n\nrequirement Performance {\ntext: Response under 200ms\nrisk: medium\npriority: high\n}\n\nLogin -> Security: derives\nSecurity -> Performance: traces` }
+  requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: critical\n}\n\nrequirement Performance {\ntext: Response under 200ms\nrisk: medium\npriority: high\n}\n\nLogin -> Security: derives\nSecurity -> Performance: traces` },
+  sankey: { title: '🌊 Sankey', source: `# Energy Flow\nCoal -> Electricity: 40\nGas -> Electricity: 30\nNuclear -> Electricity: 20\nSolar -> Electricity: 10\nElectricity -> Residential: 35\nElectricity -> Commercial: 25\nElectricity -> Industrial: 30\nElectricity -> Transport: 10` },
+  swimlane: { title: '🏊 Swimlane', source: `[Customer]\n(start) Submit Order -> Review Order\n\n[Sales]\nReview Order -> (decision) Approve?\nApprove? -> Process Payment\nApprove? -> Reject Order\n\n[Warehouse]\nProcess Payment -> Ship Order\nShip Order -> (end) Complete` }
 };
 
 export default function Demo() {
@@ -7249,11 +9324,13 @@ export default function Demo() {
   const [showImageImport, setShowImageImport] = useState(false);
   const [showPlantUMLImport, setShowPlantUMLImport] = useState(false);
   const [showPlantUMLExport, setShowPlantUMLExport] = useState(false);
+  const [showShapeLibrary, setShowShapeLibrary] = useState(false);
   const [colorSettings, setColorSettings] = useState(() => getColorSettings());
   const [diagramName, setDiagramName] = useState('Untitled Diagram');
   const [autoSaveEnabled, setAutoSaveEnabledState] = useState(() => isAutoSaveEnabled());
   const [exportStatus, setExportStatus] = useState({ loading: false, message: '' });
   const [themeName, setThemeName] = useState(() => getSavedTheme());
+  const [sketchMode, setSketchMode] = useState(() => getSavedSketchMode());
   const baseTheme = THEMES[themeName] || THEMES.dark;
 
   // Apply custom accent colors to theme
@@ -7558,6 +9635,58 @@ export default function Demo() {
     setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
   };
 
+  const handleToggleSketchMode = () => {
+    const newMode = !sketchMode;
+    setSketchMode(newMode);
+    saveSketchMode(newMode);
+    setExportStatus({ loading: false, message: newMode ? 'Sketch mode' : 'Clean mode' });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
+  // Handle shape selection from library
+  const handleSelectShape = (shape) => {
+    // Map shape template types to DEMOS keys
+    const templateToDemoKey = {
+      'flowchart': 'flowchart',
+      'orgchart': 'orgchart',
+      'state': 'state',
+      'sequence': 'sequence',
+      'network': 'network',
+      'gantt': 'gantt',
+      'pie': 'pie',
+      'erd': 'erd',
+      'class': 'class',
+      'quadrant': 'quadrant',
+      'mindmap': 'mindmap',
+      'architecture': 'architecture',
+      'usecase': 'usecase',
+      'timeline': 'timeline',
+      'journey': 'journey',
+      'gitgraph': 'git',
+      'git': 'git',
+      'deployment': 'deployment',
+      'component': 'component',
+      'c4': 'c4',
+      'activity': 'activity',
+      'requirement': 'requirement',
+      'wireframe': 'wireframe',
+    };
+
+    const demoKey = templateToDemoKey[shape.template];
+    if (demoKey && DEMOS[demoKey]) {
+      setActive(demoKey);
+      setSource(shape.dsl);
+      setShowEditor(true);
+    } else {
+      // Fallback - just use the DSL with current type
+      setSource(shape.dsl);
+      setShowEditor(true);
+    }
+    setShowShapeLibrary(false);
+    setExportStatus({ loading: false, message: `Loaded ${shape.label} template` });
+    setTimeout(() => setExportStatus({ loading: false, message: '' }), 2000);
+  };
+
   // Export handlers
   const handleExportPNG = async () => {
     if (!diagramRef.current) return;
@@ -7716,6 +9845,17 @@ export default function Demo() {
           <button onClick={handleToggleTheme} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title={`Switch to ${themeName === 'dark' ? 'light' : 'dark'} mode`}>
             {themeName === 'dark' ? '☀️' : '🌙'}
           </button>
+          <button onClick={handleToggleSketchMode} style={{ padding: '6px 10px', background: sketchMode ? `${colorSettings.accentPrimary}20` : 'transparent', border: `1px solid ${sketchMode ? colorSettings.accentPrimary : theme.border}`, borderRadius: 6, color: sketchMode ? colorSettings.accentPrimary : theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title={sketchMode ? 'Switch to clean mode' : 'Switch to sketch mode'}>
+            {sketchMode ? '✏️' : '✨'}
+          </button>
+          <button onClick={() => setShowShapeLibrary(true)} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title="Shape Library">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </button>
           <button onClick={() => setShowShortcuts(true)} style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.border}`, borderRadius: 6, color: theme.textSecondary, fontSize: '0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }} title="Keyboard Shortcuts (?)">
             ⌨️
           </button>
@@ -7868,7 +10008,7 @@ export default function Demo() {
             }
           }}
         >
-          <UniversalDiagram key={`${active}-${src}-${themeName}`} type={active} source={src} theme={themeName} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} />
+          <UniversalDiagram key={`${active}-${src}-${themeName}-${sketchMode}`} type={active} source={src} theme={themeName} sketchMode={sketchMode} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} />
         </div>
       </div>
 
@@ -8153,6 +10293,14 @@ export default function Demo() {
         onClose={() => setShowPlantUMLExport(false)}
         diagramType={active}
         diagramSource={src}
+        theme={theme}
+      />
+
+      {/* Shape Library Panel */}
+      <ShapeLibrary
+        isOpen={showShapeLibrary}
+        onClose={() => setShowShapeLibrary(false)}
+        onSelectShape={handleSelectShape}
         theme={theme}
       />
     </div>

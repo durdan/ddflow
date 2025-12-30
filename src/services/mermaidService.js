@@ -18,6 +18,10 @@ export function detectMermaidType(source) {
   if (trimmed.startsWith('gitgraph')) return 'git';
   if (trimmed.startsWith('journey')) return 'journey';
   if (trimmed.startsWith('mindmap')) return 'mindmap';
+  // C4 diagram types
+  if (trimmed.startsWith('c4context') || trimmed.startsWith('c4container') ||
+      trimmed.startsWith('c4component') || trimmed.startsWith('c4dynamic') ||
+      trimmed.startsWith('c4deployment')) return 'c4';
 
   return null;
 }
@@ -38,7 +42,19 @@ function cleanLabel(label) {
  * Detects if it's a system architecture diagram and converts accordingly
  */
 function mermaidFlowchartToDDFlow(source) {
-  const lines = source.split('\n').slice(1); // Skip first line (flowchart TD/LR)
+  const allLines = source.split('\n');
+  const firstLine = allLines[0].trim().toLowerCase();
+  const lines = allLines.slice(1); // Skip first line (flowchart TD/LR)
+
+  // Extract direction from first line: flowchart LR, flowchart TD, graph LR, etc.
+  let direction = 'TB'; // Default: top-to-bottom
+  const dirMatch = firstLine.match(/(?:flowchart|graph)\s+(td|tb|lr|rl|bt)/i);
+  if (dirMatch) {
+    direction = dirMatch[1].toUpperCase();
+    // Normalize TD to TB
+    if (direction === 'TD') direction = 'TB';
+  }
+
   const nodeLabels = new Map();
   const nodeTypes = new Map();
   const nodeSubgroups = new Map(); // Track which subgraph each node belongs to
@@ -46,6 +62,46 @@ function mermaidFlowchartToDDFlow(source) {
   const edges = [];
   let hasDecisions = false;
   let currentSubgraph = null;
+
+  // Helper to parse a node definition and extract id, label, type
+  const parseNodeDef = (str) => {
+    str = str.trim();
+    // Try different shape patterns
+    // [Label] - rectangle
+    let match = str.match(/^(\w+)\[([^\]]+)\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'process' };
+
+    // {Label} - diamond/decision
+    match = str.match(/^(\w+)\{([^}]+)\}$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'decision' };
+
+    // ((Label)) - circle
+    match = str.match(/^(\w+)\(\(([^)]+)\)\)$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'start' };
+
+    // ([Label]) - stadium
+    match = str.match(/^(\w+)\(\[([^\]]+)\]\)$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'process' };
+
+    // [(Label)] - cylinder/database
+    match = str.match(/^(\w+)\[\(([^)]+)\)\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'database' };
+
+    // (Label) - stadium/pill shape (common in Mermaid)
+    match = str.match(/^(\w+)\(([^)]+)\)$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'process' };
+
+    // Just an ID
+    match = str.match(/^(\w+)$/);
+    if (match) return { id: match[1], label: match[1], type: 'process' };
+
+    return null;
+  };
+
+  // Clean font-awesome icons from labels: fa:fa-car Car -> Car
+  const cleanFaIcons = (label) => {
+    return label.replace(/fa:fa-[\w-]+\s*/g, '').trim() || label;
+  };
 
   lines.forEach(line => {
     line = line.trim();
@@ -65,38 +121,90 @@ function mermaidFlowchartToDDFlow(source) {
       return;
     }
 
-    // Parse node definitions with shapes: A[Label] or A{Label} or A((Label)) or A([Label]) or A[(Label)]
-    const nodeDefs = [...line.matchAll(/(\w+)(?:\[([^\]]+)\]|\{([^}]+)\}|\(\(([^)]+)\)\)|\(\[([^\]]+)\]\)|\[\(([^)]+)\)\])/g)];
-    for (const match of nodeDefs) {
-      const id = match[1];
-      const rawLabel = match[2] || match[3] || match[4] || match[5] || match[6] || id;
-      const label = cleanLabel(rawLabel);
-      nodeLabels.set(id, label);
+    // Parse edges with inline node definitions: A[Label] -->|edge label| B(Label)
+    // Match pattern: NodeDef arrow (optional |label|) NodeDef
+    const edgePattern = /^(.+?)\s*(--+>|==+>|-\.+->?|--+)\s*(?:\|([^|]*)\|)?\s*(.+)$/;
+    const edgeMatch = line.match(edgePattern);
 
-      // Track subgraph membership
-      if (currentSubgraph) {
-        nodeSubgroups.set(id, currentSubgraph);
-        subgraphs.get(currentSubgraph).push(id);
+    if (edgeMatch) {
+      const [, fromPart, arrow, edgeLabel, toPart] = edgeMatch;
+
+      // Parse from node
+      const fromNode = parseNodeDef(fromPart.trim());
+      if (fromNode) {
+        const label = cleanFaIcons(fromNode.label);
+        // Only update label if this is a proper definition (has shape, not just ID reference)
+        // or if we haven't seen this node before
+        const hasShapeDefinition = fromNode.label !== fromNode.id;
+        if (hasShapeDefinition || !nodeLabels.has(fromNode.id)) {
+          nodeLabels.set(fromNode.id, label);
+        }
+        // Update type only if it's not just an ID (which defaults to 'process')
+        if (hasShapeDefinition || !nodeTypes.has(fromNode.id)) {
+          nodeTypes.set(fromNode.id, fromNode.type);
+        }
+        if (fromNode.type === 'decision') hasDecisions = true;
+        if (currentSubgraph) {
+          nodeSubgroups.set(fromNode.id, currentSubgraph);
+          if (!subgraphs.get(currentSubgraph).includes(fromNode.id)) {
+            subgraphs.get(currentSubgraph).push(fromNode.id);
+          }
+        }
       }
 
-      // Detect type from shape
-      if (match[3]) {
-        nodeTypes.set(id, 'decision'); // {diamond}
-        hasDecisions = true;
+      // Parse to node
+      const toNode = parseNodeDef(toPart.trim());
+      if (toNode) {
+        const label = cleanFaIcons(toNode.label);
+        // Only update label if this is a proper definition (has shape, not just ID reference)
+        // or if we haven't seen this node before
+        const hasShapeDefinition = toNode.label !== toNode.id;
+        if (hasShapeDefinition || !nodeLabels.has(toNode.id)) {
+          nodeLabels.set(toNode.id, label);
+        }
+        // Update type only if it's not just an ID (which defaults to 'process')
+        if (hasShapeDefinition || !nodeTypes.has(toNode.id)) {
+          nodeTypes.set(toNode.id, toNode.type);
+        }
+        if (toNode.type === 'decision') hasDecisions = true;
+        if (currentSubgraph) {
+          nodeSubgroups.set(toNode.id, currentSubgraph);
+          if (!subgraphs.get(currentSubgraph).includes(toNode.id)) {
+            subgraphs.get(currentSubgraph).push(toNode.id);
+          }
+        }
       }
-      else if (match[4]) nodeTypes.set(id, 'start'); // ((circle))
-      else if (match[5]) nodeTypes.set(id, 'process'); // ([stadium])
-      else if (match[6]) nodeTypes.set(id, 'database'); // [(cylinder)]
-      else nodeTypes.set(id, 'process'); // [rectangle]
+
+      // Add edge
+      if (fromNode && toNode) {
+        edges.push({
+          from: fromNode.id,
+          to: toNode.id,
+          label: edgeLabel ? cleanLabel(edgeLabel) : ''
+        });
+      }
+      return;
     }
 
-    // Parse edges: A --> B or A -->|label| B
-    const edgeMatch = line.match(/(\w+)\s*(?:--?-?>|==?>|-\.->?)\s*(?:\|([^|]+)\|)?\s*(\w+)/);
-    if (edgeMatch) {
-      const [, from, label, to] = edgeMatch;
-      if (!nodeLabels.has(from)) nodeLabels.set(from, from);
-      if (!nodeLabels.has(to)) nodeLabels.set(to, to);
-      edges.push({ from, to, label: cleanLabel(label || '') });
+    // Parse standalone node definitions (no edge)
+    const standaloneNode = parseNodeDef(line);
+    if (standaloneNode) {
+      const label = cleanFaIcons(standaloneNode.label);
+      // Only update if this has a shape definition or we haven't seen it
+      const hasShapeDefinition = standaloneNode.label !== standaloneNode.id;
+      if (hasShapeDefinition || !nodeLabels.has(standaloneNode.id)) {
+        nodeLabels.set(standaloneNode.id, label);
+      }
+      if (hasShapeDefinition || !nodeTypes.has(standaloneNode.id)) {
+        nodeTypes.set(standaloneNode.id, standaloneNode.type);
+      }
+      if (standaloneNode.type === 'decision') hasDecisions = true;
+      if (currentSubgraph) {
+        nodeSubgroups.set(standaloneNode.id, currentSubgraph);
+        if (!subgraphs.get(currentSubgraph).includes(standaloneNode.id)) {
+          subgraphs.get(currentSubgraph).push(standaloneNode.id);
+        }
+      }
     }
   });
 
@@ -112,20 +220,24 @@ function mermaidFlowchartToDDFlow(source) {
 
   // Check if this looks like a system/architecture diagram
   // Multiple edges, subgraphs, or labeled connections suggest architecture
+  // But NOT if it has decision nodes (those are flowcharts)
   const sourceCounts = new Map();
   let hasInteractionLabels = false;
   edges.forEach(({ from, label }) => {
     sourceCounts.set(from, (sourceCounts.get(from) || 0) + 1);
-    if (label && /interact|fetch|cache|call|send|use|connect|query|read|write|get|post|create|update/i.test(label)) {
+    if (label && /interact|fetch|cache|call|send|use|connect|query|read|write|get|post|create|update|webhook|event/i.test(label)) {
       hasInteractionLabels = true;
     }
   });
   const hasMultipleFromSameSource = [...sourceCounts.values()].some(count => count > 1);
   const hasSubgraphs = subgraphs.size > 0;
-  const isArchitectureStyle = hasSubgraphs ||
+  // Architecture style: subgraphs OR (interaction labels without decisions) OR (many nodes with interaction labels)
+  // Simple flowcharts with decisions should NOT become architecture diagrams
+  const isArchitectureStyle = !hasDecisions && (
+                              hasSubgraphs ||
                               (hasMultipleFromSameSource && hasInteractionLabels) ||
-                              (hasInteractionLabels && !hasDecisions) ||
-                              (nodeLabels.size >= 5 && hasMultipleFromSameSource);
+                              hasInteractionLabels ||
+                              (nodeLabels.size >= 8 && hasMultipleFromSameSource));
 
   // If it looks like an architecture diagram, convert to architecture format
   if (isArchitectureStyle) {
@@ -139,6 +251,11 @@ function mermaidFlowchartToDDFlow(source) {
   const ddflowLines = [];
   const processedNodes = new Set();
 
+  // Add direction directive if not default (TB)
+  if (direction !== 'TB') {
+    ddflowLines.push(`direction: ${direction}`);
+  }
+
   // First, output the starting node
   if (nodeOrder.length > 0) {
     const firstId = nodeOrder[0];
@@ -148,12 +265,16 @@ function mermaidFlowchartToDDFlow(source) {
     processedNodes.add(firstId);
   }
 
-  // Then output edges with target node types
-  edges.forEach(({ from, to }) => {
+  // Then output edges with target node types and labels
+  edges.forEach(({ from, to, label }) => {
     const fromLabel = nodeLabels.get(from) || from;
     const toLabel = nodeLabels.get(to) || to;
     const toType = nodeTypes.get(to) || 'process';
-    ddflowLines.push(`${fromLabel} -> (${toType}) ${toLabel}`);
+    if (label) {
+      ddflowLines.push(`${fromLabel} -> (${toType}) ${toLabel}: ${label}`);
+    } else {
+      ddflowLines.push(`${fromLabel} -> (${toType}) ${toLabel}`);
+    }
     processedNodes.add(to);
   });
 
@@ -165,196 +286,191 @@ function mermaidFlowchartToDDFlow(source) {
 
 /**
  * Convert to DDFlow architecture format with hierarchical layers based on graph flow
- * Uses subgraphs from Mermaid to better organize layers
+ * Uses BFS to compute proper layer hierarchy from edge directions
  */
 function mermaidToArchitecture(nodeLabels, edges, nodeOrder, nodeSubgroups = new Map(), subgraphs = new Map(), nodeTypes = new Map()) {
   const ddflowLines = [];
 
-  // Subgroup to layer type mapping
-  const subgroupToLayerType = {
-    'gateway layer': 'gateway',
-    'gateway': 'gateway',
-    'core services': 'services',
-    'services': 'services',
-    'data layer': 'data',
-    'data': 'data',
-    'external': 'services',
-    'external services': 'services',
-    'clients': 'clients',
-    'frontend': 'clients',
-  };
-
-  // Type patterns for layer naming (fallback)
+  // Extended type patterns for better layer inference
   const typePatterns = {
-    clients: /^(fe|ui|frontend|user|client|browser|mobile|app|web|platform)/i,
-    gateway: /gateway|proxy|load.?balancer|nginx|router|ingress|auth/i,
-    services: /api|service|server|backend|engine|model|search|personal|stripe|twilio|payment|sms/i,
-    data: /database|db|mysql|postgres|mongo|redis|cache|storage|sql|queue|index|store|elasticsearch/i,
+    clients: /^(fe|ui|frontend|user|client|browser|mobile|app)\b/i,
+    gateway: /gateway|proxy|load.?balancer|nginx|router|ingress|kong|traefik|envoy/i,
+    service: /(api|service|server|backend|engine|controller|handler|processor)\b/i,
+    database: /database|db|mysql|postgres|mongo|redis|cache|storage|sql|queue|index|store|elastic|dynamo|s3|bucket/i,
+    external: /external|third.?party|vendor|saas|stripe|twilio|sendgrid|aws|gcp|azure/i,
   };
 
-  // If we have subgraphs, use them to organize layers
-  if (subgraphs.size > 0) {
-    // First, output nodes not in any subgraph (typically entry points like Frontend)
-    const nodesWithoutSubgraph = nodeOrder.filter(id => !nodeSubgroups.has(id));
-    if (nodesWithoutSubgraph.length > 0) {
-      const labels = nodesWithoutSubgraph.map(id => nodeLabels.get(id) || id);
-      // Determine type for these nodes
-      let layerType = 'clients';
-      for (const [type, pattern] of Object.entries(typePatterns)) {
-        if (labels.some(label => pattern.test(label)) || nodesWithoutSubgraph.some(id => pattern.test(id))) {
-          layerType = type;
-          break;
-        }
-      }
-      ddflowLines.push(`[${layerType}] ${labels.join(', ')}`);
+  // Infer node type from label
+  const inferNodeType = (label, id) => {
+    const text = `${label} ${id}`.toLowerCase();
+    if (typePatterns.clients.test(text)) return 'clients';
+    if (typePatterns.gateway.test(text)) return 'gateway';
+    if (typePatterns.database.test(text)) return 'database';
+    if (typePatterns.external.test(text)) return 'external';
+    if (typePatterns.service.test(text)) return 'service';
+    return 'service'; // Default
+  };
+
+  // Build adjacency for BFS-based layer computation
+  const outgoing = new Map();
+  const incoming = new Map();
+  nodeOrder.forEach(id => {
+    outgoing.set(id, []);
+    incoming.set(id, []);
+  });
+
+  edges.forEach(({ from, to }) => {
+    if (outgoing.has(from)) outgoing.get(from).push(to);
+    if (incoming.has(to)) incoming.get(to).push(from);
+  });
+
+  // Find entry points (nodes with no incoming edges, or identified as clients/frontend)
+  const entryPoints = new Set();
+  nodeOrder.forEach(id => {
+    const label = nodeLabels.get(id) || id;
+    const incomingEdges = incoming.get(id) || [];
+    // Entry point if: no incoming edges OR matches frontend pattern
+    if (incomingEdges.length === 0 || typePatterns.clients.test(label) || typePatterns.clients.test(id)) {
+      entryPoints.add(id);
     }
+  });
 
-    // Then output each subgraph as a layer
-    subgraphs.forEach((nodeIds, subgraphName) => {
-      if (nodeIds.length === 0) return;
+  // If no entry points found, use nodes that only have outgoing edges to frontend
+  if (entryPoints.size === 0 && nodeOrder.length > 0) {
+    entryPoints.add(nodeOrder[0]);
+  }
 
-      const labels = nodeIds.map(id => nodeLabels.get(id) || id);
-
-      // Determine layer type from subgraph name or node content
-      let layerType = subgroupToLayerType[subgraphName.toLowerCase()] || 'services';
-
-      // If not found in mapping, try to detect from labels/IDs
-      if (layerType === 'services') {
-        for (const [type, pattern] of Object.entries(typePatterns)) {
-          if (labels.some(label => pattern.test(label)) || nodeIds.some(id => pattern.test(id))) {
-            layerType = type;
-            break;
-          }
-        }
-      }
-
-      ddflowLines.push(`[${layerType}] ${labels.join(', ')}`);
-    });
-  } else {
-    // No subgraphs - fall back to flow-based layering
-
-    // First pass: identify potential "entry points" (UI, Frontend, User, etc.)
-    const entryPatterns = /^(fe|ui|frontend|user|client|app|browser|web|mobile)/i;
-    const entryPoints = new Set();
-    nodeOrder.forEach(id => {
-      const label = nodeLabels.get(id) || id;
-      if (entryPatterns.test(id) || entryPatterns.test(label)) {
-        entryPoints.add(id);
-      }
-    });
-
-    // Build adjacency info
-    const outgoing = new Map();
-    const incoming = new Map();
-
-    nodeOrder.forEach(id => {
-      outgoing.set(id, []);
-      incoming.set(id, []);
-    });
-
-    // Identify "forward" vs "backward" edges (backward = response edges)
-    const forwardEdges = [];
-
-    edges.forEach(edge => {
-      const { from, to } = edge;
-      if (!outgoing.has(from)) outgoing.set(from, []);
-      outgoing.get(from).push(to);
-      if (!incoming.has(to)) incoming.set(to, []);
-      incoming.get(to).push(from);
-
-      // Edge going TO an entry point is likely a "response" edge - skip for layering
-      if (!(entryPoints.has(to) && !entryPoints.has(from))) {
-        forwardEdges.push(edge);
-      }
-    });
-
-    // Calculate layers using only forward edges
-    const nodeLevel = new Map();
-
-    // Initialize entry points at level 0, others at -1
-    nodeOrder.forEach(id => {
-      if (entryPoints.has(id)) {
-        nodeLevel.set(id, 0);
-      } else {
-        nodeLevel.set(id, -1);
-      }
-    });
-
-    // If no entry points found, use nodes with no incoming forward edges
-    if (entryPoints.size === 0) {
-      const forwardIncoming = new Map();
-      nodeOrder.forEach(id => forwardIncoming.set(id, 0));
-      forwardEdges.forEach(({ to }) => {
-        forwardIncoming.set(to, (forwardIncoming.get(to) || 0) + 1);
-      });
-      nodeOrder.forEach(id => {
-        if (forwardIncoming.get(id) === 0) {
-          nodeLevel.set(id, 0);
-        }
-      });
+  // Identify "response" edges (edges going BACK to entry points)
+  const responseEdges = new Set();
+  edges.forEach(({ from, to }, idx) => {
+    if (entryPoints.has(to) && !entryPoints.has(from)) {
+      responseEdges.add(idx);
     }
+  });
 
-    // BFS to assign levels based on forward edges
-    let changed = true;
-    let iterations = 0;
-    while (changed && iterations < 20) {
-      changed = false;
-      iterations++;
+  // Compute layers using BFS from entry points (ignoring response edges)
+  const nodeLevel = new Map();
+  entryPoints.forEach(id => nodeLevel.set(id, 0));
 
-      forwardEdges.forEach(({ from, to }) => {
-        const fromLevel = nodeLevel.get(from);
-        const toLevel = nodeLevel.get(to);
+  // BFS to assign levels
+  const queue = [...entryPoints];
+  while (queue.length > 0) {
+    const nodeId = queue.shift();
+    const currentLevel = nodeLevel.get(nodeId);
+    const targets = outgoing.get(nodeId) || [];
 
-        if (fromLevel >= 0) {
-          const newLevel = fromLevel + 1;
-          if (toLevel < newLevel) {
-            nodeLevel.set(to, newLevel);
-            changed = true;
-          }
-        }
-      });
-    }
+    targets.forEach(targetId => {
+      // Skip if this edge is a response edge
+      const edgeIdx = edges.findIndex(e => e.from === nodeId && e.to === targetId);
+      if (responseEdges.has(edgeIdx)) return;
 
-    // Handle any nodes still at level -1
-    nodeOrder.forEach(id => {
-      if (nodeLevel.get(id) < 0) {
-        nodeLevel.set(id, 1);
-      }
-    });
-
-    // Group nodes by level
-    const levelGroups = new Map();
-    nodeOrder.forEach(id => {
-      const level = nodeLevel.get(id);
-      if (!levelGroups.has(level)) {
-        levelGroups.set(level, []);
-      }
-      levelGroups.get(level).push(id);
-    });
-
-    // Sort levels and create layer definitions
-    const sortedLevels = [...levelGroups.keys()].sort((a, b) => a - b);
-
-    sortedLevels.forEach((level, index) => {
-      const nodeIds = levelGroups.get(level);
-      const labels = nodeIds.map(id => nodeLabels.get(id) || id);
-
-      // Determine layer type
-      let layerName = 'services';
-      for (const [type, pattern] of Object.entries(typePatterns)) {
-        if (labels.some(label => pattern.test(label)) || nodeIds.some(id => pattern.test(id))) {
-          layerName = type;
-          break;
+      const targetLevel = nodeLevel.get(targetId);
+      const newLevel = currentLevel + 1;
+      if (targetLevel === undefined || targetLevel < newLevel) {
+        nodeLevel.set(targetId, newLevel);
+        if (!queue.includes(targetId)) {
+          queue.push(targetId);
         }
       }
-
-      // Override based on position
-      if (index === 0) layerName = 'clients';
-      else if (index === sortedLevels.length - 1 && layerName === 'services') layerName = 'data';
-
-      ddflowLines.push(`[${layerName}] ${labels.join(', ')}`);
     });
   }
+
+  // Handle nodes in subgraphs that weren't reached by BFS
+  if (subgraphs.size > 0) {
+    // Nodes in subgraphs might be separate flow (like ingestion)
+    subgraphs.forEach((nodeIds, subgraphName) => {
+      // Find the entry point of this subgraph
+      const subgraphEntries = nodeIds.filter(id => {
+        const inEdges = (incoming.get(id) || []).filter(src => !nodeIds.includes(src));
+        return inEdges.length === 0;
+      });
+
+      // If subgraph has no external inputs, treat as parallel flow
+      if (subgraphEntries.length === nodeIds.length) {
+        // All nodes in subgraph have no external inputs - assign starting level
+        const maxLevel = Math.max(0, ...[...nodeLevel.values()]);
+        nodeIds.forEach((id, idx) => {
+          if (!nodeLevel.has(id)) {
+            nodeLevel.set(id, 0); // Start at same level as main entry
+          }
+        });
+        // Now BFS within subgraph
+        const subQueue = nodeIds.filter(id => nodeLevel.has(id));
+        while (subQueue.length > 0) {
+          const nodeId = subQueue.shift();
+          const currentLevel = nodeLevel.get(nodeId);
+          const targets = (outgoing.get(nodeId) || []).filter(t => nodeIds.includes(t) || !nodeLevel.has(t));
+          targets.forEach(targetId => {
+            const newLevel = currentLevel + 1;
+            if (!nodeLevel.has(targetId) || nodeLevel.get(targetId) < newLevel) {
+              nodeLevel.set(targetId, newLevel);
+              if (!subQueue.includes(targetId)) subQueue.push(targetId);
+            }
+          });
+        }
+      }
+    });
+  }
+
+  // Assign remaining unleveled nodes
+  const avgLevel = nodeLevel.size > 0
+    ? Math.floor([...nodeLevel.values()].reduce((a, b) => a + b, 0) / nodeLevel.size)
+    : 0;
+  nodeOrder.forEach(id => {
+    if (!nodeLevel.has(id)) {
+      nodeLevel.set(id, avgLevel);
+    }
+  });
+
+  // Group nodes by level
+  const levelGroups = new Map();
+  nodeOrder.forEach(id => {
+    const level = nodeLevel.get(id);
+    if (!levelGroups.has(level)) {
+      levelGroups.set(level, []);
+    }
+    levelGroups.get(level).push(id);
+  });
+
+  // Sort levels
+  const sortedLevels = [...levelGroups.keys()].sort((a, b) => a - b);
+
+  // Generate layer definitions with proper types
+  sortedLevels.forEach((level) => {
+    const nodeIds = levelGroups.get(level);
+
+    // Group nodes in this level by their inferred type
+    const typeGroups = new Map();
+    nodeIds.forEach(id => {
+      const label = nodeLabels.get(id) || id;
+      // Check if node is in a subgraph
+      const subgroupName = nodeSubgroups.get(id);
+      let nodeType;
+
+      if (subgroupName) {
+        // Infer type from subgraph name first
+        const subLower = subgroupName.toLowerCase();
+        if (/ingestion|ingest|import|input/i.test(subLower)) nodeType = 'service';
+        else if (/gateway|api/i.test(subLower)) nodeType = 'gateway';
+        else if (/data|storage|database/i.test(subLower)) nodeType = 'database';
+        else if (/external|third/i.test(subLower)) nodeType = 'external';
+        else nodeType = inferNodeType(label, id);
+      } else {
+        nodeType = inferNodeType(label, id);
+      }
+
+      if (!typeGroups.has(nodeType)) {
+        typeGroups.set(nodeType, []);
+      }
+      typeGroups.get(nodeType).push(id);
+    });
+
+    // Output each type group as a separate layer line
+    typeGroups.forEach((ids, type) => {
+      const labels = ids.map(id => nodeLabels.get(id) || id);
+      ddflowLines.push(`[${type}] ${labels.join(', ')}`);
+    });
+  });
 
   ddflowLines.push('');
 
@@ -377,50 +493,113 @@ function mermaidToArchitecture(nodeLabels, edges, nodeOrder, nodeSubgroups = new
  */
 function mermaidSequenceToDDFlow(source) {
   const lines = source.split('\n').slice(1);
-  const participants = [];
-  const messages = [];
+  const participants = new Set();
+  const ddflowLines = [];
+  const participantAliases = new Map(); // id -> display name
 
   lines.forEach(line => {
     line = line.trim();
     if (!line || line.startsWith('%%')) return;
 
-    // Parse participant
+    // Parse participant: participant A as Alice
     const partMatch = line.match(/^participant\s+(\w+)(?:\s+as\s+(.+))?/i);
     if (partMatch) {
-      participants.push(partMatch[2] || partMatch[1]);
+      const id = partMatch[1];
+      const name = partMatch[2] || partMatch[1];
+      participantAliases.set(id, name);
+      participants.add(name);
       return;
     }
 
-    // Parse actor
+    // Parse actor: actor A as Alice
     const actorMatch = line.match(/^actor\s+(\w+)(?:\s+as\s+(.+))?/i);
     if (actorMatch) {
-      participants.push(actorMatch[2] || actorMatch[1]);
+      const id = actorMatch[1];
+      const name = actorMatch[2] || actorMatch[1];
+      participantAliases.set(id, name);
+      participants.add(name);
+      return;
+    }
+
+    // Parse loop block: loop HealthCheck
+    const loopMatch = line.match(/^loop\s+(.+)/i);
+    if (loopMatch) {
+      ddflowLines.push(`loop ${loopMatch[1]}`);
+      return;
+    }
+
+    // Parse alt block: alt Success
+    const altMatch = line.match(/^alt\s+(.+)/i);
+    if (altMatch) {
+      ddflowLines.push(`alt ${altMatch[1]}`);
+      return;
+    }
+
+    // Parse else block: else Failure
+    const elseMatch = line.match(/^else\s*(.*)/i);
+    if (elseMatch) {
+      ddflowLines.push(`else ${elseMatch[1] || ''}`);
+      return;
+    }
+
+    // Parse opt block: opt Optional
+    const optMatch = line.match(/^opt\s+(.+)/i);
+    if (optMatch) {
+      ddflowLines.push(`opt ${optMatch[1]}`);
+      return;
+    }
+
+    // Parse end block
+    if (line.toLowerCase() === 'end') {
+      ddflowLines.push('end');
+      return;
+    }
+
+    // Parse note: Note right of John: text
+    const noteMatch = line.match(/^note\s+(left|right)\s+of\s+(\w+)\s*:\s*(.+)/i);
+    if (noteMatch) {
+      const position = noteMatch[1].toLowerCase();
+      const participantId = noteMatch[2];
+      const participantName = participantAliases.get(participantId) || participantId;
+      const noteText = noteMatch[3];
+      ddflowLines.push(`note ${position} of ${participantName}: ${noteText}`);
+      return;
+    }
+
+    // Parse note over: Note over A,B: text
+    const noteOverMatch = line.match(/^note\s+over\s+(.+?)\s*:\s*(.+)/i);
+    if (noteOverMatch) {
+      const participantIds = noteOverMatch[1].split(',').map(p => {
+        const id = p.trim();
+        return participantAliases.get(id) || id;
+      });
+      ddflowLines.push(`note over ${participantIds.join(', ')}: ${noteOverMatch[2]}`);
       return;
     }
 
     // Parse message: A->>B: message or A-->>B: message
     const msgMatch = line.match(/(\w+)\s*(-?->>?|-->>?)\s*(\w+)\s*:\s*(.+)/);
     if (msgMatch) {
-      const [, from, arrow, to, msg] = msgMatch;
+      const [, fromId, arrow, toId, msg] = msgMatch;
+      const from = participantAliases.get(fromId) || fromId;
+      const to = participantAliases.get(toId) || toId;
       const isDashed = arrow.startsWith('--');
-      messages.push({ from, to, msg, isDashed });
+      participants.add(from);
+      participants.add(to);
+      const ddflowArrow = isDashed ? '-->' : '->';
+      ddflowLines.push(`${from} ${ddflowArrow} ${to}: ${msg}`);
     }
   });
 
-  // Build DDFlow source
-  const ddflowLines = [];
-
-  if (participants.length > 0) {
-    ddflowLines.push(`participant ${participants.join(', ')}`);
-    ddflowLines.push('');
+  // Build final output with participants at top
+  const output = [];
+  if (participants.size > 0) {
+    output.push(`participant ${[...participants].join(', ')}`);
+    output.push('');
   }
+  output.push(...ddflowLines);
 
-  messages.forEach(({ from, to, msg, isDashed }) => {
-    const arrow = isDashed ? '-->' : '->';
-    ddflowLines.push(`${from} ${arrow} ${to}: ${msg}`);
-  });
-
-  return ddflowLines.join('\n');
+  return output.join('\n');
 }
 
 /**
@@ -808,6 +987,376 @@ function mermaidMindmapToDDFlow(source) {
 }
 
 /**
+ * Convert Mermaid C4 diagram to DDFlow architecture format
+ * Supports C4Context, C4Container, C4Component, C4Dynamic, C4Deployment
+ */
+function mermaidC4ToDDFlow(source) {
+  const lines = source.split('\n');
+  const firstLine = lines[0].trim().toLowerCase();
+
+  // Determine C4 diagram type
+  let c4Type = 'context';
+  if (firstLine.includes('c4container')) c4Type = 'container';
+  else if (firstLine.includes('c4component')) c4Type = 'component';
+  else if (firstLine.includes('c4dynamic')) c4Type = 'dynamic';
+  else if (firstLine.includes('c4deployment')) c4Type = 'deployment';
+
+  const elements = new Map(); // alias -> { type, label, description, technology, boundary }
+  const relationships = [];
+  const boundaryStack = []; // Stack for nested boundaries
+  const boundaryDefinitions = new Map(); // boundary alias -> { label, type, parentBoundary }
+
+  // Helper to extract parameters from C4 function calls
+  // Format: FunctionName(alias, "label", "tech", "description")
+  const parseC4Call = (line) => {
+    const match = line.match(/^(\w+)\s*\((.+)\)\s*$/);
+    if (!match) return null;
+
+    const funcName = match[1];
+    const argsStr = match[2];
+
+    // Parse arguments - handle quoted strings and plain values
+    const args = [];
+    let current = '';
+    let inQuote = false;
+    let quoteChar = '';
+
+    for (let i = 0; i < argsStr.length; i++) {
+      const char = argsStr[i];
+      if ((char === '"' || char === "'") && !inQuote) {
+        inQuote = true;
+        quoteChar = char;
+      } else if (char === quoteChar && inQuote) {
+        inQuote = false;
+        quoteChar = '';
+      } else if (char === ',' && !inQuote) {
+        args.push(current.trim().replace(/^["']|["']$/g, ''));
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) {
+      args.push(current.trim().replace(/^["']|["']$/g, ''));
+    }
+
+    return { funcName, args };
+  };
+
+  // Process lines
+  lines.slice(1).forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('%%') || line.startsWith('title')) return;
+
+    // Handle boundary start
+    const boundaryMatch = line.match(/^(Enterprise_Boundary|System_Boundary|Container_Boundary|Boundary)\s*\(([^,]+),\s*["']([^"']+)["'](?:,\s*["']([^"']+)["'])?\s*\)/i);
+    if (boundaryMatch) {
+      const boundaryAlias = boundaryMatch[2].trim();
+      const boundaryLabel = boundaryMatch[3];
+      const boundaryType = boundaryMatch[4] || boundaryMatch[1].replace('_Boundary', '').toLowerCase();
+      const parentBoundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].alias : null;
+
+      boundaryDefinitions.set(boundaryAlias, {
+        label: boundaryLabel,
+        type: boundaryType,
+        parentBoundary
+      });
+
+      boundaryStack.push({
+        type: boundaryMatch[1],
+        alias: boundaryAlias,
+        label: boundaryLabel
+      });
+      return;
+    }
+
+    // Handle boundary end
+    if (line === '}' || line === '{') {
+      if (line === '}' && boundaryStack.length > 0) {
+        boundaryStack.pop();
+      }
+      return;
+    }
+
+    // Handle UpdateElementStyle, UpdateRelStyle, UpdateLayoutConfig - skip styling
+    if (line.startsWith('Update')) return;
+
+    const parsed = parseC4Call(line);
+    if (!parsed) return;
+
+    const { funcName, args } = parsed;
+    const funcLower = funcName.toLowerCase();
+
+    // Current boundary context
+    const currentBoundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].alias : null;
+
+    // Person elements
+    if (funcLower.startsWith('person')) {
+      const isExternal = funcLower.includes('_ext');
+      elements.set(args[0], {
+        type: isExternal ? 'external' : 'clients',
+        label: args[1] || args[0],
+        description: args[2] || '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // System elements
+    if (funcLower.startsWith('system')) {
+      const isExternal = funcLower.includes('_ext');
+      const isDb = funcLower.includes('db');
+      const isQueue = funcLower.includes('queue');
+      let type = 'service';
+      if (isExternal) type = 'external';
+      else if (isDb) type = 'database';
+      else if (isQueue) type = 'service';
+
+      elements.set(args[0], {
+        type,
+        label: args[1] || args[0],
+        description: args[2] || '',
+        technology: '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // Container elements
+    if (funcLower.startsWith('container')) {
+      const isExternal = funcLower.includes('_ext');
+      const isDb = funcLower.includes('db');
+      const isQueue = funcLower.includes('queue');
+      let type = 'service';
+      if (isExternal) type = 'external';
+      else if (isDb) type = 'database';
+      else if (isQueue) type = 'service';
+
+      elements.set(args[0], {
+        type,
+        label: args[1] || args[0],
+        technology: args[2] || '',
+        description: args[3] || '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // Component elements
+    if (funcLower.startsWith('component')) {
+      const isExternal = funcLower.includes('_ext');
+      const isDb = funcLower.includes('db');
+      let type = 'service';
+      if (isExternal) type = 'external';
+      else if (isDb) type = 'database';
+
+      elements.set(args[0], {
+        type,
+        label: args[1] || args[0],
+        technology: args[2] || '',
+        description: args[3] || '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // Node (for deployment diagrams)
+    if (funcLower === 'node' || funcLower === 'node_l' || funcLower === 'node_r') {
+      elements.set(args[0], {
+        type: 'service',
+        label: args[1] || args[0],
+        technology: args[2] || '',
+        description: args[3] || '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // Deployment Node
+    if (funcLower.startsWith('deployment_node')) {
+      elements.set(args[0], {
+        type: 'service',
+        label: args[1] || args[0],
+        technology: args[2] || '',
+        description: args[3] || '',
+        boundary: currentBoundary
+      });
+      return;
+    }
+
+    // Relationships
+    if (funcLower.startsWith('rel') || funcLower === 'birel') {
+      const isBidirectional = funcLower === 'birel';
+      // Rel(from, to, label, ?technology)
+      // RelIndex(index, from, to, label) for dynamic diagrams
+      let from, to, label, tech;
+
+      if (funcLower === 'relindex') {
+        // RelIndex has index as first param
+        from = args[1];
+        to = args[2];
+        label = args[3] || '';
+        tech = args[4] || '';
+      } else {
+        from = args[0];
+        to = args[1];
+        label = args[2] || '';
+        tech = args[3] || '';
+      }
+
+      relationships.push({
+        from,
+        to,
+        label: tech ? `${label} [${tech}]` : label,
+        bidirectional: isBidirectional
+      });
+      return;
+    }
+  });
+
+  // Build DDFlow architecture DSL
+  const ddflowLines = [];
+
+  // Group elements by boundary first, then by type
+  const elementsByBoundary = new Map(); // boundary alias -> elements
+  const unboundedElements = []; // elements without boundary
+
+  elements.forEach((el, alias) => {
+    if (el.boundary) {
+      if (!elementsByBoundary.has(el.boundary)) {
+        elementsByBoundary.set(el.boundary, []);
+      }
+      elementsByBoundary.get(el.boundary).push({ alias, ...el });
+    } else {
+      unboundedElements.push({ alias, ...el });
+    }
+  });
+
+  // Helper to output elements grouped by type
+  const outputElementsByType = (els) => {
+    const byType = new Map();
+    els.forEach(el => {
+      if (!byType.has(el.type)) byType.set(el.type, []);
+      byType.get(el.type).push(el);
+    });
+
+    const typeOrder = ['clients', 'external', 'gateway', 'service', 'database'];
+    typeOrder.forEach(type => {
+      const typeEls = byType.get(type);
+      if (typeEls && typeEls.length > 0) {
+        const labels = typeEls.map(e => e.label);
+        ddflowLines.push(`[${type}] ${labels.join(', ')}`);
+      }
+    });
+
+    // Output any remaining types
+    byType.forEach((typeEls, type) => {
+      if (!typeOrder.includes(type) && typeEls.length > 0) {
+        const labels = typeEls.map(e => e.label);
+        ddflowLines.push(`[${type}] ${labels.join(', ')}`);
+      }
+    });
+  };
+
+  // Output unbounded elements first (outside any boundary)
+  if (unboundedElements.length > 0) {
+    outputElementsByType(unboundedElements);
+    ddflowLines.push('');
+  }
+
+  // Find root boundaries (those without parent) and build hierarchy
+  const rootBoundaries = [];
+  const childrenOf = new Map(); // parent alias -> [child aliases]
+
+  boundaryDefinitions.forEach((boundaryDef, boundaryAlias) => {
+    if (!boundaryDef.parentBoundary) {
+      rootBoundaries.push(boundaryAlias);
+    } else {
+      if (!childrenOf.has(boundaryDef.parentBoundary)) {
+        childrenOf.set(boundaryDef.parentBoundary, []);
+      }
+      childrenOf.get(boundaryDef.parentBoundary).push(boundaryAlias);
+    }
+  });
+
+  // Helper to recursively output a boundary and its children
+  const outputBoundary = (boundaryAlias, indent = '') => {
+    const boundaryDef = boundaryDefinitions.get(boundaryAlias);
+    if (!boundaryDef) return;
+
+    const boundaryElements = elementsByBoundary.get(boundaryAlias) || [];
+    const children = childrenOf.get(boundaryAlias) || [];
+
+    // Skip empty boundaries with no children
+    if (boundaryElements.length === 0 && children.length === 0) return;
+
+    // Start boundary block
+    ddflowLines.push(`${indent}group "${boundaryDef.label}" {`);
+
+    // Output elements directly in this boundary (grouped by type)
+    if (boundaryElements.length > 0) {
+      const byType = new Map();
+      boundaryElements.forEach(el => {
+        if (!byType.has(el.type)) byType.set(el.type, []);
+        byType.get(el.type).push(el);
+      });
+
+      const typeOrder = ['clients', 'external', 'gateway', 'service', 'database'];
+      typeOrder.forEach(type => {
+        const typeEls = byType.get(type);
+        if (typeEls && typeEls.length > 0) {
+          const labels = typeEls.map(e => e.label);
+          ddflowLines.push(`${indent}  [${type}] ${labels.join(', ')}`);
+        }
+      });
+
+      // Output any remaining types
+      byType.forEach((typeEls, type) => {
+        if (!typeOrder.includes(type) && typeEls.length > 0) {
+          const labels = typeEls.map(e => e.label);
+          ddflowLines.push(`${indent}  [${type}] ${labels.join(', ')}`);
+        }
+      });
+    }
+
+    // Output nested child boundaries
+    if (children.length > 0) {
+      if (boundaryElements.length > 0) ddflowLines.push('');
+      children.forEach(childAlias => {
+        outputBoundary(childAlias, indent + '  ');
+      });
+    }
+
+    // End boundary block
+    ddflowLines.push(`${indent}}`);
+    ddflowLines.push('');
+  };
+
+  // Output all root boundaries recursively
+  rootBoundaries.forEach(rootAlias => {
+    outputBoundary(rootAlias);
+  });
+
+  // Output relationships
+  relationships.forEach(rel => {
+    const fromEl = elements.get(rel.from);
+    const toEl = elements.get(rel.to);
+    const fromLabel = fromEl?.label || rel.from;
+    const toLabel = toEl?.label || rel.to;
+
+    if (rel.bidirectional) {
+      ddflowLines.push(`${fromLabel} <-> ${toLabel}: ${rel.label}`);
+    } else if (rel.label) {
+      ddflowLines.push(`${fromLabel} -> ${toLabel}: ${rel.label}`);
+    } else {
+      ddflowLines.push(`${fromLabel} -> ${toLabel}`);
+    }
+  });
+
+  return ddflowLines.join('\n');
+}
+
+/**
  * Convert Mermaid source to DDFlow DSL
  * @param {string} mermaidSource - Mermaid diagram source
  * @returns {{ type: string, source: string }} DDFlow type and source
@@ -816,7 +1365,7 @@ export function mermaidToDDFlow(mermaidSource) {
   const detectedType = detectMermaidType(mermaidSource);
 
   if (!detectedType) {
-    throw new Error('Could not detect Mermaid diagram type. Supported types: flowchart, sequence, class, state, erDiagram, gantt, pie, gitGraph, journey, mindmap');
+    throw new Error('Could not detect Mermaid diagram type. Supported types: flowchart, sequence, class, state, erDiagram, gantt, pie, gitGraph, journey, mindmap, c4');
   }
 
   let source = '';
@@ -856,6 +1405,10 @@ export function mermaidToDDFlow(mermaidSource) {
       break;
     case 'mindmap':
       source = mermaidMindmapToDDFlow(mermaidSource);
+      break;
+    case 'c4':
+      source = mermaidC4ToDDFlow(mermaidSource);
+      type = 'architecture';
       break;
     default:
       throw new Error(`Unsupported Mermaid diagram type: ${type}`);
