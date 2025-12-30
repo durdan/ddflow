@@ -19,6 +19,20 @@ export function detectPlantUMLType(source) {
   // Check content patterns for @startuml diagrams
   const content = source.replace(/@startuml.*|@enduml.*/gi, '').trim();
 
+  // C4 diagram (C4-PlantUML library)
+  if (/\b(Person|System|Container|Component|System_Ext|Container_Ext|Boundary|Enterprise_Boundary|System_Boundary|Container_Boundary)\s*\(/i.test(content) ||
+      /\b(Rel|Rel_R|Rel_L|Rel_U|Rel_D)\s*\(/i.test(content)) {
+    return 'c4';
+  }
+
+  // Deployment diagram - node, device, artifact, etc.
+  if (/\b(node|device|artifact|file|folder|frame|rectangle|card)\s+"?[^"]*"?\s*(<<|as|\{|$)/im.test(content)) {
+    // Only if it looks like deployment (has node/device/artifact)
+    if (/\b(node|device|artifact)\b/i.test(content)) {
+      return 'deployment';
+    }
+  }
+
   // Use case diagram
   if (/\bactor\b/i.test(content) && (/\busecase\b/i.test(content) || /\([^)]+\)/i.test(content))) {
     return 'usecase';
@@ -87,7 +101,7 @@ export function detectPlantUMLType(source) {
  * Convert PlantUML source to DDFlow DSL
  */
 export function plantumlToDDFlow(source) {
-  const type = detectPlantUMLType(source);
+  let type = detectPlantUMLType(source);
 
   let dsl;
   switch (type) {
@@ -117,6 +131,13 @@ export function plantumlToDDFlow(source) {
       break;
     case 'erd':
       dsl = plantumlERDToDDFlow(source);
+      break;
+    case 'c4':
+      dsl = plantumlC4ToDDFlow(source);
+      type = 'architecture'; // C4 maps to architecture
+      break;
+    case 'deployment':
+      dsl = plantumlDeploymentToDDFlow(source);
       break;
     default:
       throw new Error(`Unsupported PlantUML diagram type: ${type}`);
@@ -757,6 +778,274 @@ function plantumlERDToDDFlow(source) {
 
   // Clean up trailing commas
   return result.join('\n').replace(/,\n\);/g, '\n);');
+}
+
+/**
+ * C4 diagram: PlantUML (C4-PlantUML) -> DDFlow architecture
+ * C4-PlantUML uses: Person(), System(), Container(), Component(), Boundary(), Rel()
+ */
+function plantumlC4ToDDFlow(source) {
+  const content = stripPlantUMLTags(source);
+  const lines = content.split('\n').filter(l => l.trim());
+  const elements = new Map(); // alias -> { type, label, description }
+  const relationships = [];
+  const boundaryStack = [];
+  const boundaryDefs = new Map();
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+
+    // Skip includes and comments
+    if (trimmed.startsWith('!include') || trimmed.startsWith("'")) return;
+
+    // Boundary start: Boundary(alias, "Label") or Enterprise_Boundary, System_Boundary, Container_Boundary
+    const boundaryMatch = trimmed.match(/^(Enterprise_Boundary|System_Boundary|Container_Boundary|Boundary)\s*\(\s*(\w+)\s*,\s*["']([^"']+)["']/i);
+    if (boundaryMatch) {
+      const parent = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1] : null;
+      boundaryDefs.set(boundaryMatch[2], { label: boundaryMatch[3], type: boundaryMatch[1], parent });
+      boundaryStack.push(boundaryMatch[2]);
+      return;
+    }
+
+    // Boundary end
+    if (trimmed === '}' && boundaryStack.length > 0) {
+      boundaryStack.pop();
+      return;
+    }
+
+    // Person(alias, "Label", "Description")
+    const personMatch = trimmed.match(/^Person(?:_Ext)?\s*\(\s*(\w+)\s*,\s*["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?\)/i);
+    if (personMatch) {
+      const boundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1] : null;
+      elements.set(personMatch[1], {
+        type: 'user',
+        label: personMatch[2],
+        description: personMatch[3] || '',
+        boundary
+      });
+      return;
+    }
+
+    // System(alias, "Label", "Description") or System_Ext
+    const systemMatch = trimmed.match(/^System(?:_Ext)?\s*\(\s*(\w+)\s*,\s*["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?\)/i);
+    if (systemMatch) {
+      const boundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1] : null;
+      elements.set(systemMatch[1], {
+        type: trimmed.includes('_Ext') ? 'external' : 'services',
+        label: systemMatch[2],
+        description: systemMatch[3] || '',
+        boundary
+      });
+      return;
+    }
+
+    // Container(alias, "Label", "Technology", "Description") or Container_Ext
+    const containerMatch = trimmed.match(/^Container(?:_Ext|Db|Queue)?\s*\(\s*(\w+)\s*,\s*["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?(?:\s*,\s*["']([^"']+)["'])?\)/i);
+    if (containerMatch) {
+      const boundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1] : null;
+      let type = 'services';
+      if (/ContainerDb/i.test(trimmed)) type = 'data';
+      else if (/ContainerQueue/i.test(trimmed)) type = 'queue';
+      else if (/_Ext/i.test(trimmed)) type = 'external';
+
+      elements.set(containerMatch[1], {
+        type,
+        label: containerMatch[2],
+        technology: containerMatch[3] || '',
+        description: containerMatch[4] || '',
+        boundary
+      });
+      return;
+    }
+
+    // Component(alias, "Label", "Technology", "Description") or Component_Ext
+    const componentMatch = trimmed.match(/^Component(?:_Ext|Db|Queue)?\s*\(\s*(\w+)\s*,\s*["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?(?:\s*,\s*["']([^"']+)["'])?\)/i);
+    if (componentMatch) {
+      const boundary = boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1] : null;
+      let type = 'services';
+      if (/ComponentDb/i.test(trimmed)) type = 'data';
+      if (/_Ext/i.test(trimmed)) type = 'external';
+
+      elements.set(componentMatch[1], {
+        type,
+        label: componentMatch[2],
+        technology: componentMatch[3] || '',
+        description: componentMatch[4] || '',
+        boundary
+      });
+      return;
+    }
+
+    // Rel(from, to, "Label", "Tech") or Rel_R, Rel_L, Rel_U, Rel_D, BiRel
+    const relMatch = trimmed.match(/^(?:Bi)?Rel(?:_[RLUD])?\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?\)/i);
+    if (relMatch) {
+      relationships.push({
+        from: relMatch[1],
+        to: relMatch[2],
+        label: relMatch[3],
+        tech: relMatch[4] || ''
+      });
+    }
+  });
+
+  // Build DDFlow architecture format with boundaries as groups
+  const result = [];
+
+  // Group elements by layer type
+  const layers = { user: [], clients: [], services: [], data: [], external: [], queue: [] };
+
+  elements.forEach((el, alias) => {
+    const layerKey = el.type || 'services';
+    if (!layers[layerKey]) layers[layerKey] = [];
+    layers[layerKey].push(el.label);
+  });
+
+  // Output layer definitions
+  Object.entries(layers).forEach(([layer, items]) => {
+    if (items.length > 0) {
+      result.push(`[${layer}] ${items.join(', ')}`);
+    }
+  });
+
+  // Output boundaries as groups
+  const outputBoundary = (boundaryAlias, indent = '') => {
+    const def = boundaryDefs.get(boundaryAlias);
+    if (!def) return;
+
+    result.push(`${indent}group "${def.label}" {`);
+
+    // Find elements in this boundary
+    elements.forEach((el, alias) => {
+      if (el.boundary === boundaryAlias) {
+        result.push(`${indent}  ${el.label}`);
+      }
+    });
+
+    // Find child boundaries
+    boundaryDefs.forEach((childDef, childAlias) => {
+      if (childDef.parent === boundaryAlias) {
+        outputBoundary(childAlias, indent + '  ');
+      }
+    });
+
+    result.push(`${indent}}`);
+  };
+
+  // Output top-level boundaries
+  boundaryDefs.forEach((def, alias) => {
+    if (!def.parent) {
+      outputBoundary(alias);
+    }
+  });
+
+  result.push('');
+
+  // Output relationships
+  relationships.forEach(rel => {
+    const fromEl = elements.get(rel.from);
+    const toEl = elements.get(rel.to);
+    if (fromEl && toEl) {
+      result.push(`${fromEl.label} -> ${toEl.label}`);
+    }
+  });
+
+  return result.join('\n');
+}
+
+/**
+ * Deployment diagram: PlantUML -> DDFlow deployment
+ */
+function plantumlDeploymentToDDFlow(source) {
+  const content = stripPlantUMLTags(source);
+  const lines = content.split('\n').filter(l => l.trim());
+  const result = [];
+  const nodes = new Map();
+  const connections = [];
+  let currentNode = null;
+  let inBlock = false;
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+
+    // Node/device/artifact definition: node "Label" as alias or node Label
+    const nodeMatch = trimmed.match(/^(node|device|artifact|file|folder|frame|rectangle|card)\s+"?([^"{]+)"?(?:\s+as\s+(\w+))?(?:\s*\{)?/i);
+    if (nodeMatch) {
+      const type = nodeMatch[1].toLowerCase();
+      const label = nodeMatch[2].trim();
+      const alias = nodeMatch[3] || label.replace(/\s+/g, '_');
+
+      nodes.set(alias, { type, label, children: [] });
+      currentNode = alias;
+
+      if (trimmed.includes('{')) {
+        inBlock = true;
+      }
+      return;
+    }
+
+    // Nested element inside a node
+    if (inBlock && currentNode) {
+      // Another nested node/artifact
+      const nestedMatch = trimmed.match(/^(node|device|artifact|component|database)\s+"?([^"{]+)"?(?:\s+as\s+(\w+))?/i);
+      if (nestedMatch) {
+        const childAlias = nestedMatch[3] || nestedMatch[2].replace(/\s+/g, '_');
+        nodes.set(childAlias, { type: nestedMatch[1].toLowerCase(), label: nestedMatch[2].trim(), parent: currentNode });
+        const parent = nodes.get(currentNode);
+        if (parent) parent.children.push(childAlias);
+        return;
+      }
+    }
+
+    // End block
+    if (trimmed === '}') {
+      inBlock = false;
+      currentNode = null;
+      return;
+    }
+
+    // Connection: A --> B or A -> B
+    const connMatch = trimmed.match(/^(\w+)\s*(-->|->|--)\s*(\w+)(?:\s*:\s*(.+))?$/);
+    if (connMatch) {
+      connections.push({
+        from: connMatch[1],
+        to: connMatch[3],
+        label: connMatch[4] || ''
+      });
+    }
+  });
+
+  // Build DDFlow deployment format
+  nodes.forEach((node, alias) => {
+    if (!node.parent) {
+      // Top-level node
+      let line = `(${node.type}) ${node.label}`;
+      result.push(line);
+
+      // Add children
+      if (node.children.length > 0) {
+        node.children.forEach(childAlias => {
+          const child = nodes.get(childAlias);
+          if (child) {
+            result.push(`  (${child.type}) ${child.label}`);
+          }
+        });
+      }
+    }
+  });
+
+  result.push('');
+
+  // Add connections
+  connections.forEach(conn => {
+    const fromNode = nodes.get(conn.from);
+    const toNode = nodes.get(conn.to);
+    if (fromNode && toNode) {
+      const label = conn.label ? `: ${conn.label}` : '';
+      result.push(`${fromNode.label} -> ${toNode.label}${label}`);
+    }
+  });
+
+  return result.join('\n');
 }
 
 // ============================================

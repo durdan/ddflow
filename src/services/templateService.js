@@ -14,6 +14,7 @@ export const TEMPLATE_CATEGORIES = {
   BUSINESS: 'Business',
   NETWORK: 'Network',
   UI_DESIGN: 'UI Design',
+  APP_BUNDLES: 'App Bundles',
 };
 
 // Preset templates organized by category
@@ -878,82 +879,245 @@ Private Subnet B -- RDS Replica`,
   // UI DESIGN
   // ============================================
   {
+    id: 'landing-page-wireframe',
+    name: 'Landing Page',
+    description: 'Complete landing page with hero, features, pricing, testimonials',
+    category: TEMPLATE_CATEGORIES.UI_DESIGN,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    source: `{SaaS Landing Page}
+[[ Logo | Features | Pricing | About | [Sign Up] ]]
+
+[hero: Build Amazing Products Faster | The all-in-one platform for modern teams to collaborate, build, and ship products. | Start Free Trial]
+
+---
+
+## Why Teams Love Us
+
+[feature: 🚀 | Lightning Fast | Deploy in seconds with our optimized infrastructure and global CDN.]
+
+[feature: 🔒 | Enterprise Security | SOC 2 compliant with end-to-end encryption and SSO support.]
+
+[feature: 📊 | Real-time Analytics | Get instant insights with beautiful dashboards and reports.]
+
+[feature: 🤝 | Team Collaboration | Work together seamlessly with built-in comments and sharing.]
+
+---
+
+## Simple, Transparent Pricing
+
+[pricing: Starter | $9 | 5 projects, 10GB storage, Email support | Get Started]
+
+[pricing: Pro | $29 | Unlimited projects, 100GB storage, Priority support, API access | Start Free Trial]
+
+[pricing: Enterprise | $99 | Everything in Pro, SSO, Dedicated support, Custom integrations | Contact Sales]
+
+---
+
+[testimonial: "This platform transformed how our team works. We shipped 3x faster!" | Sarah Chen | VP Engineering, TechCorp]
+
+[testimonial: "The best investment we made this year. Incredible ROI." | Marcus Johnson | CEO, StartupXYZ]
+
+---
+
+[cta: Ready to get started? | Join 10,000+ teams already using our platform. | Start Free Trial]
+
+---
+
+[footer: Product | Features | Pricing | Docs :: Company | About | Blog | Careers :: Support | Help Center | Contact | Status :: © 2024 Company. All rights reserved.]
+
+[social: twitter | github | linkedin | youtube]`,
+  },
+  {
     id: 'dashboard-wireframe',
     name: 'Admin Dashboard',
-    description: 'Dashboard layout with stats and charts',
+    description: 'Modern dashboard with stats, charts, and data tables',
     category: TEMPLATE_CATEGORIES.UI_DESIGN,
     type: 'wireframe',
     thumbnail: 'wireframe',
     source: `{Admin Dashboard}
-[[ Dashboard | Users | Products | Orders | Settings | (@Admin) ]]
+[[ 🏠 Dashboard | 👥 Users | 📦 Products | 📋 Orders | ⚙️ Settings | (@Admin) ]]
 
->> Home > Dashboard
-
-# Dashboard Overview
-
-<Stats Row>
-[progress: 75%] Active Users: 1,234
-[progress: 60%] Orders Today: 156
-[progress: 85%] Revenue: $12,456
-[progress: 45%] Conversion: 4.5%
-</Stats Row>
+>> Home > Dashboard Overview
 
 ---
 
-<Recent Orders>
-# Recent Orders
-|Order ID|Customer|Amount|Status|
-|#1234|John Doe|$125.00|Completed|
-|#1235|Jane Smith|$89.50|Processing|
-|#1236|Bob Wilson|$234.00|Pending|
-|#1237|Alice Brown|$67.25|Shipped|
+## Key Metrics
 
-[View All Orders] [Export CSV]
-</Recent Orders>
+[stat: 12,456 | Total Users | +12.5%]
+
+[stat: $84,230 | Revenue | +8.2%]
+
+[stat: 1,847 | Orders | +15.3%]
+
+[stat: 94.2% | Satisfaction | +2.1%]
 
 ---
 
-<Quick Actions>
-# Quick Actions
-[v Select Action]
-[+ Add Product] [+ Add User] [Generate Report]
-</Quick Actions>`,
+## Quick Actions
+
+[widget: New Orders | 24 | 🛒]
+
+[widget: Pending Reviews | 8 | ⏳]
+
+[widget: Support Tickets | 12 | 🎫]
+
+[widget: Low Stock Items | 5 | ⚠️]
+
+---
+
+## Recent Activity
+
+[activity: John Smith created a new order #1234 | 5 minutes ago]
+
+[activity: Sarah Johnson updated product inventory | 12 minutes ago]
+
+[activity: Mike Brown resolved support ticket #567 | 1 hour ago]
+
+[activity: System backup completed successfully | 2 hours ago]
+
+---
+
+## Orders Overview
+
+[data-table: 5 rows]
+
+---
+
+[toast: 3 new orders received | success]
+
+[fab: +]`,
   },
   {
-    id: 'login-wireframe',
-    name: 'Login Page',
-    description: 'Login form with social auth options',
+    id: 'auth-wireframe',
+    name: 'Authentication Pages',
+    description: 'Login and signup forms with modern styling',
     category: TEMPLATE_CATEGORIES.UI_DESIGN,
     type: 'wireframe',
     thumbnail: 'wireframe',
-    source: `{Login}
+    source: `{Authentication}
 
-<Login Form>
-# Welcome Back
+## Login Form
+
+[login-form: Welcome Back]
+
+---
+
+## Sign Up Form
+
+[signup-form: Create Your Account]
+
+---
+
+## Social Login Options
+
+[social: google | github | microsoft | apple]
+
+---
+
+## Password Reset
+
+<Card>
+## Forgot Password?
+
+Enter your email and we'll send you a reset link.
 
 [text: Email address]
-[password: Password]
 
-[ ] Remember me
-[Forgot Password?]
+[Send Reset Link]
 
-[Login]
-
----
-
-Or continue with
-
-[Google] [GitHub] [Microsoft]
+>> Remember your password? Sign in
+</Card>
 
 ---
 
-Don't have an account? [Sign Up]
-</Login Form>`,
+## Two-Factor Authentication
+
+<Card>
+## Verify Your Identity
+
+Enter the 6-digit code from your authenticator app.
+
+[text: ● ● ● ● ● ●]
+
+[Verify Code]
+
+[ ] Trust this device for 30 days
+
+>> Didn't receive a code? Resend
+</Card>`,
+  },
+  {
+    id: 'mobile-app-wireframe',
+    name: 'Mobile App Screens',
+    description: 'Mobile UI with bottom nav, app bar, and FAB',
+    category: TEMPLATE_CATEGORIES.UI_DESIGN,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    source: `{Mobile App}
+
+## Home Screen
+
+[app-bar: Home | 🔔 | 👤]
+
+[search: Search anything...]
+
+---
+
+## Stats Overview
+
+[stat: 2,847 | Steps Today | +18%]
+
+[stat: 6.2 | Hours Sleep | -5%]
+
+[stat: 1,450 | Calories | +12%]
+
+---
+
+## Activity Feed
+
+[activity: Morning workout completed | 8:30 AM]
+
+[activity: Reached daily step goal | 2:15 PM]
+
+[activity: Sleep score: Excellent | Last night]
+
+---
+
+[fab: +]
+
+[bottom-nav: 🏠 Home | 📊 Stats | ➕ | 🏆 Goals | 👤 Profile]
+
+---
+
+## Profile Screen
+
+[app-bar: Profile | ⚙️]
+
+[profile: Alex Johnson | @alexj | Health enthusiast and fitness lover. Building better habits one day at a time.]
+
+---
+
+## Empty State
+
+[empty: No workouts yet | Start tracking your fitness journey by adding your first workout. | Add Workout]
+
+---
+
+## Error State
+
+[error: Connection Lost | Unable to sync your data. Please check your internet connection. | Retry]
+
+---
+
+## Loading State
+
+[loading: Syncing your data...]`,
   },
   {
     id: 'settings-wireframe',
     name: 'Settings Page',
-    description: 'User settings with tabs and form elements',
+    description: 'Comprehensive settings with accordions and toggles',
     category: TEMPLATE_CATEGORIES.UI_DESIGN,
     type: 'wireframe',
     thumbnail: 'wireframe',
@@ -962,10 +1126,17 @@ Don't have an account? [Sign Up]
 
 >> Settings > Account
 
-(( Profile | Security | Notifications | Billing ))
+(( General | Security | Notifications | Billing | Integrations ))
 
-<Profile Settings>
-# Profile Information
+---
+
+## General Settings
+
+[accordion: Profile Information | Privacy Settings | Language & Region]
+
+---
+
+## Profile
 
 (@John Doe)
 
@@ -974,58 +1145,997 @@ Don't have an account? [Sign Up]
 [text: Phone]
 [textarea: Bio]
 
+[upload: Upload profile picture]
+
 ---
 
-# Preferences
+## Preferences
+
+[toggle: on] Dark Mode
+[toggle: off] Compact View
+[toggle: on] Show Online Status
+[toggle: off] Auto-play Videos
+
+---
 
 [v Select Timezone]
 [v Select Language]
 
-[x] Receive newsletter
-[ ] Enable dark mode
+---
+
+## Notifications
+
+[x] Email notifications
+[x] Push notifications
+[ ] SMS notifications
+[x] Weekly digest
+
+---
+
+## Danger Zone
+
+[!error] Delete Account
+This action cannot be undone. All your data will be permanently deleted.
+[Delete Account]
 
 ---
 
 [Cancel] [Save Changes]
-</Profile Settings>`,
+
+[toast: Settings saved successfully | success]`,
   },
   {
     id: 'product-wireframe',
-    name: 'Product Listing',
-    description: 'E-commerce product grid with filters',
+    name: 'E-Commerce Product Page',
+    description: 'Product listing with reviews and comments',
     category: TEMPLATE_CATEGORIES.UI_DESIGN,
     type: 'wireframe',
     thumbnail: 'wireframe',
-    source: `{Products}
-[[ Home | Products | Cart | (@User) ]]
+    source: `{Product Details}
+[[ 🏠 Home | 📦 Products | 🛒 Cart (3) | ❤️ Wishlist | (@User) ]]
 
->> Products > Electronics
-
-# Electronics
-
-[search: Search products...]
-
-<Filters>
-[v Category]
-[v Price Range]
-[v Brand]
-[x] In Stock Only
-</Filters>
+>> Electronics > Smartphones > iPhone 15 Pro
 
 ---
 
-<Product Grid>
-|Product 1|Product 2|Product 3|
-|$99.99|$149.99|$79.99|
-|[Add to Cart]|[Add to Cart]|[Add to Cart]|
-|Product 4|Product 5|Product 6|
-|$199.99|$59.99|$129.99|
-|[Add to Cart]|[Add to Cart]|[Add to Cart]|
-</Product Grid>
+[image: Product Image]
+
+## iPhone 15 Pro
+
+★★★★☆ (4.8) · 1,234 reviews
+
+**$999.00** ~~$1,199.00~~ [!success] Save $200
+
+[v Select Color: Space Black]
+[v Select Storage: 256GB]
+[v Quantity: 1]
+
+[Add to Cart] [Buy Now]
 
 ---
 
-[< Previous] Page 1 of 10 [Next >]`,
+## Key Features
+
+[feature: 🎬 | ProMotion Display | 120Hz adaptive refresh rate]
+
+[feature: 📸 | 48MP Camera | Professional-grade photography]
+
+[feature: ⚡ | A17 Pro Chip | Industry-leading performance]
+
+[feature: 🔋 | All-Day Battery | Up to 29 hours video playback]
+
+---
+
+## Customer Reviews
+
+[comment: techfan2024 | Absolutely love this phone! The camera quality is insane. | 2 days ago]
+
+[comment: sarah_m | Great upgrade from my old phone. The display is beautiful. | 1 week ago]
+
+[comment: johnsmith | Fast shipping, arrived earlier than expected. | 2 weeks ago]
+
+---
+
+## Technical Specs
+
+[accordion: Display | Camera | Performance | Battery | Connectivity]
+
+---
+
+[code: json]
+
+---
+
+## You Might Also Like
+
+<Card>
+AirPods Pro
+$249.00
+[Add to Cart]
+</Card>
+
+<Card>
+MagSafe Charger
+$39.00
+[Add to Cart]
+</Card>
+
+---
+
+[footer: Shop | Mac | iPad | iPhone | Watch :: Support | Contact | Returns :: © 2024 Store]`,
+  },
+  {
+    id: 'blog-wireframe',
+    name: 'Blog Article',
+    description: 'Blog post with comments, social sharing, and related posts',
+    category: TEMPLATE_CATEGORIES.UI_DESIGN,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    source: `{Blog Article}
+[[ 📝 Blog | 🏷️ Categories | 🔍 Search | [Subscribe] ]]
+
+>> Tech > Web Development > Building Scalable React Apps
+
+---
+
+# Building Scalable React Applications in 2024
+
+[avatar-group: 3] By **John Doe** · Dec 15, 2024 · 8 min read
+
+[chip: React] [chip: Architecture] [chip: Performance]
+
+---
+
+[image: Featured Image]
+
+---
+
+## Introduction
+
+Building scalable React applications requires careful planning and adherence to best practices. In this article, we'll explore the key patterns and techniques...
+
+---
+
+## Code Example
+
+[code: javascript]
+
+---
+
+## Key Takeaways
+
+- Use proper state management
+- Implement code splitting
+- Optimize bundle size
+- Write testable components
+
+---
+
+## Share This Article
+
+[social: twitter | linkedin | facebook]
+
+---
+
+## Comments (24)
+
+[comment: dev_sarah | Great article! The code splitting section was particularly helpful. | 2 hours ago]
+
+[comment: react_pro | Would love to see a follow-up on testing strategies. | 5 hours ago]
+
+[comment: newbie_dev | This helped me understand so much. Thank you! | 1 day ago]
+
+---
+
+## Related Articles
+
+[feature: 📘 | State Management Patterns | Learn about Redux, MobX, and Zustand]
+
+[feature: 🚀 | Performance Optimization | Tips for faster React apps]
+
+[feature: 🧪 | Testing Best Practices | Write reliable tests]
+
+---
+
+[cta: Want more articles? | Subscribe to our newsletter for weekly updates. | Subscribe]
+
+---
+
+[footer: Blog | About | Contact | Privacy :: © 2024 TechBlog]`,
+  },
+  {
+    id: 'saas-dashboard-wireframe',
+    name: 'SaaS Application',
+    description: 'Full SaaS app with sidebar, widgets, and notifications',
+    category: TEMPLATE_CATEGORIES.UI_DESIGN,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    source: `{SaaS Dashboard}
+[[ 🎯 ProjectHub | Projects | Team | Analytics | Settings | [Upgrade] | (@PM) ]]
+
+>> Projects > Website Redesign > Tasks
+
+---
+
+## Project Stats
+
+[stat: 67% | Completed | +5% this week]
+
+[stat: 12 | In Progress | 3 due today]
+
+[stat: 8 | Team Members | 2 online]
+
+[stat: 5 | Days Left | On track]
+
+---
+
+## Quick Actions
+
+[widget: Add Task | + | 📝]
+
+[widget: Schedule Meeting | + | 📅]
+
+[widget: Upload Files | + | 📤]
+
+[widget: Invite Member | + | 👥]
+
+---
+
+## Task Board
+
+[data-table: 5 rows]
+
+---
+
+## Recent Files
+
+[upload: Drop files here to upload]
+
+---
+
+## Team Activity
+
+[activity: Emma updated the design mockups | 10 min ago]
+
+[activity: James completed "API Integration" | 1 hour ago]
+
+[activity: Sarah commented on "Homepage Design" | 2 hours ago]
+
+---
+
+## Upcoming Deadlines
+
+[toast: Sprint review meeting in 2 hours | warning]
+
+[toast: Design approval deadline tomorrow | info]
+
+---
+
+## Need Help?
+
+[accordion: Getting Started Guide | Keyboard Shortcuts | Contact Support]
+
+---
+
+[fab: +]
+
+[toast: Changes saved automatically | success]`,
+  },
+
+  // ============================================
+  // APP DESIGN BUNDLES (Wireframes + User Journey)
+  // ============================================
+
+  // E-commerce App Bundle - Home Page
+  {
+    id: 'ecommerce-home',
+    name: '🛒 E-commerce: Home Page',
+    description: 'E-commerce app home page with featured products and categories',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'E-commerce App',
+    bundleOrder: 1,
+    source: `{ShopFlow - Home}
+[[ 🛒 ShopFlow | Categories | Deals | 🔍 Search... | ❤️ | 🛒 (3) | [Sign In] ]]
+
+>> Home
+
+---
+
+[hero: Summer Sale - Up to 50% Off | Discover amazing deals on thousands of products. Limited time offer! | Shop Now]
+
+---
+
+## Featured Categories
+
+<card>
+[feature: 👗 | Fashion | Latest trends in clothing]
+
+[feature: 📱 | Electronics | Gadgets & devices]
+
+[feature: 🏠 | Home & Living | Furniture & decor]
+
+[feature: 🎮 | Gaming | Consoles & accessories]
+</>
+
+---
+
+## Trending Products
+
+<card>
+|Product|Price|Rating|
+|Wireless Earbuds|$79.99|⭐⭐⭐⭐⭐|
+|Smart Watch Pro|$299.99|⭐⭐⭐⭐|
+|Laptop Stand|$49.99|⭐⭐⭐⭐⭐|
+|USB-C Hub|$39.99|⭐⭐⭐⭐|
+</>
+
+---
+
+## Special Offers
+
+[stat: 2,847 | Products on Sale | 🔥]
+
+[stat: 50% | Max Discount | 💰]
+
+[stat: 24h | Flash Deal Ends | ⏰]
+
+---
+
+[footer: Shop | Categories | Deals :: Account | Orders | Wishlist :: Help | Contact | Returns :: © 2024 ShopFlow]`,
+  },
+
+  // E-commerce App Bundle - Product Page
+  {
+    id: 'ecommerce-product',
+    name: '🛒 E-commerce: Product Page',
+    description: 'Product detail page with images, specs, and reviews',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'E-commerce App',
+    bundleOrder: 2,
+    source: `{ShopFlow - Product}
+[[ 🛒 ShopFlow | Categories | Deals | 🔍 Search... | ❤️ | 🛒 (3) | [Sign In] ]]
+
+>> Home > Electronics > Headphones > Wireless Earbuds Pro
+
+---
+
+<card>
+## Product Images
+
+[img: Main product image]
+
+[img 1:1] [img 1:1] [img 1:1] [img 1:1]
+</>
+
+<Sidebar>
+## Wireless Earbuds Pro
+
+⭐⭐⭐⭐⭐ (2,847 reviews)
+
+### $79.99 ~~$129.99~~
+
+{badge:sale} 38% OFF
+
+---
+
+**Color**
+(( Black | White | Navy ))
+
+**Quantity**
+[v 1      ]
+
+---
+
+[Add to Cart]
+[Buy Now]
+
+---
+
+- ✓ Free shipping over $50
+- ✓ 30-day return policy
+- ✓ 2-year warranty
+</>
+
+---
+
+## Product Details
+
+<card>
+(( Description | Specifications | Reviews ))
+
+Premium wireless earbuds with active noise cancellation,
+30-hour battery life, and crystal-clear audio quality.
+
+- Active Noise Cancellation
+- 30-hour total battery life
+- IPX4 water resistance
+- Touch controls
+- Bluetooth 5.3
+</>
+
+---
+
+## Customer Reviews
+
+<card>
+[testimonial: Amazing sound quality! | Sarah M. | ⭐⭐⭐⭐⭐]
+
+[testimonial: Best earbuds I've owned | John D. | ⭐⭐⭐⭐⭐]
+
+[testimonial: Great value for money | Mike R. | ⭐⭐⭐⭐]
+</>
+
+---
+
+## You May Also Like
+
+|Product|Price|
+|Charging Case|$29.99|
+|Ear Tips Pack|$12.99|
+|Carry Pouch|$19.99|`,
+  },
+
+  // E-commerce App Bundle - Cart Page
+  {
+    id: 'ecommerce-cart',
+    name: '🛒 E-commerce: Cart Page',
+    description: 'Shopping cart with items, quantities, and order summary',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'E-commerce App',
+    bundleOrder: 3,
+    source: `{ShopFlow - Cart}
+[[ 🛒 ShopFlow | Categories | Deals | 🔍 Search... | ❤️ | 🛒 (3) | [Sign In] ]]
+
+>> Home > Shopping Cart
+
+---
+
+## Shopping Cart (3 items)
+
+<card>
+### Cart Items
+
+---
+
+|Product|Price|Qty|Total|
+|Wireless Earbuds Pro|$79.99|[v 1]|$79.99|
+|Smart Watch Pro|$299.99|[v 1]|$299.99|
+|USB-C Hub|$39.99|[v 2]|$79.98|
+
+---
+
+[🗑️ Remove Selected]  [Continue Shopping]
+</>
+
+<Sidebar>
+### Order Summary
+
+---
+
+Subtotal: **$459.96**
+
+Shipping: **Free**
+
+Tax: **$36.80**
+
+---
+
+[___Promo Code___] [Apply]
+
+---
+
+### Total: **$496.76**
+
+---
+
+[Proceed to Checkout]
+
+---
+
+[✓] I agree to terms and conditions
+
+---
+
+**We Accept**
+💳 Visa | Mastercard | PayPal | Apple Pay
+</>
+
+---
+
+## Recommended For You
+
+<card>
+[feature: 🎧 | Headphone Stand | $24.99]
+
+[feature: 🔌 | Fast Charger | $19.99]
+
+[feature: 📱 | Phone Case | $14.99]
+</>
+
+---
+
+[toast: Item added to cart | success]`,
+  },
+
+  // E-commerce App Bundle - Checkout Page
+  {
+    id: 'ecommerce-checkout',
+    name: '🛒 E-commerce: Checkout Page',
+    description: 'Checkout flow with shipping, payment, and confirmation',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'E-commerce App',
+    bundleOrder: 4,
+    source: `{ShopFlow - Checkout}
+[[ 🛒 ShopFlow | 🔒 Secure Checkout ]]
+
+---
+
+[step: 2/4]
+
+## Checkout
+
+---
+
+<card>
+### 1. Shipping Address ✓
+
+John Doe
+123 Main Street, Apt 4B
+New York, NY 10001
+📞 (555) 123-4567
+
+[Edit]
+</>
+
+<card>
+### 2. Payment Method
+
+(( 💳 Credit Card | PayPal | Apple Pay ))
+
+---
+
+**Card Number**
+[____1234 5678 9012 3456____]
+
+**Expiry**          **CVV**
+[__12/25__]         [__***__]
+
+**Name on Card**
+[____John Doe____]
+
+---
+
+[x] Save card for future purchases
+</>
+
+<card>
+### 3. Review Order
+
+|Item|Qty|Price|
+|Wireless Earbuds Pro|1|$79.99|
+|Smart Watch Pro|1|$299.99|
+|USB-C Hub|2|$79.98|
+
+---
+
+Subtotal: $459.96
+Shipping: Free
+Tax: $36.80
+
+---
+
+**Total: $496.76**
+</>
+
+---
+
+<Sidebar>
+### Order Summary
+
+3 items
+
+---
+
+**Subtotal:** $459.96
+**Shipping:** Free
+**Tax:** $36.80
+
+---
+
+### Total
+## $496.76
+
+---
+
+[Place Order]
+
+---
+
+🔒 Your payment info is secure
+
+---
+
+- ✓ 30-day returns
+- ✓ Free shipping
+- ✓ Secure payment
+</>
+
+---
+
+[toast: Shipping address confirmed | success]`,
+  },
+
+  // E-commerce App Bundle - Order Confirmation
+  {
+    id: 'ecommerce-confirmation',
+    name: '🛒 E-commerce: Order Confirmation',
+    description: 'Order success page with details and tracking',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'E-commerce App',
+    bundleOrder: 5,
+    source: `{ShopFlow - Order Confirmed}
+[[ 🛒 ShopFlow | Categories | Deals | 🔍 Search... | ❤️ | 🛒 | (@John) ]]
+
+---
+
+<card>
+## ✅ Order Confirmed!
+
+Thank you for your purchase, John!
+
+---
+
+**Order Number:** #SHP-2024-78542
+
+**Estimated Delivery:** Jan 5-7, 2025
+
+---
+
+[Track Order]  [View Order Details]
+</>
+
+---
+
+## Order Summary
+
+<card>
+|Item|Qty|Price|
+|Wireless Earbuds Pro|1|$79.99|
+|Smart Watch Pro|1|$299.99|
+|USB-C Hub|2|$79.98|
+
+---
+
+**Total Paid: $496.76**
+</>
+
+---
+
+## Shipping To
+
+<card>
+**John Doe**
+123 Main Street, Apt 4B
+New York, NY 10001
+
+📦 Standard Shipping (3-5 business days)
+</>
+
+---
+
+## What's Next?
+
+<card>
+[feature: 📧 | Confirmation Email | Check your inbox for order details]
+
+[feature: 📦 | Shipping Updates | We'll notify you when your order ships]
+
+[feature: 📱 | Track Anytime | Use your order number to track delivery]
+</>
+
+---
+
+[Continue Shopping]
+
+---
+
+[toast: Order #SHP-2024-78542 placed successfully! | success]
+
+---
+
+[footer: Shop | My Orders | Help :: © 2024 ShopFlow]`,
+  },
+
+  // E-commerce App Bundle - User Journey
+  {
+    id: 'ecommerce-user-journey',
+    name: '🛒 E-commerce: User Journey',
+    description: 'Complete shopping flow from browsing to purchase',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'journey',
+    thumbnail: 'journey',
+    bundle: 'E-commerce App',
+    bundleOrder: 6,
+    source: `[user] Customer
+
+[screen:ecommerce-home] Home Page
+[screen:ecommerce-product] Product Page
+[screen:ecommerce-cart] Cart
+[screen:ecommerce-checkout] Checkout
+[success:ecommerce-confirmation] Order Confirmed
+
+Customer -> Home Page
+Home Page -browse-> Product Page
+Product Page -add to cart-> Cart
+Product Page -back-> Home Page
+Cart -checkout-> Checkout
+Cart -edit-> Cart
+Cart -continue-> Home Page
+Checkout -place order-> Order Confirmed
+Checkout -back-> Cart`,
+  },
+
+  // SaaS App Bundle - Dashboard
+  {
+    id: 'saas-dashboard',
+    name: '📊 SaaS App: Dashboard',
+    description: 'Main dashboard with metrics and activity',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'SaaS App',
+    bundleOrder: 1,
+    source: `{TaskFlow - Dashboard}
+[[ 📊 TaskFlow | Dashboard | Projects | Team | Reports | [Upgrade] | (@PM) ]]
+
+>> Dashboard
+
+---
+
+[hero: Welcome back, Sarah! | You have 5 tasks due today and 2 meetings scheduled. | View Tasks]
+
+---
+
+## Key Metrics
+
+[stat: 24 | Active Projects | +3]
+
+[stat: 156 | Tasks Completed | +12%]
+
+[stat: 8 | Team Members | +1]
+
+[stat: 94% | On-time Rate | +2%]
+
+---
+
+## Recent Projects
+
+<card>
+|Project|Status|Progress|Due Date|
+|Website Redesign|{badge:In Progress}|[====----] 60%|Jan 15|
+|Mobile App v2|{badge:On Track}|[=======--] 80%|Jan 10|
+|API Integration|{badge:At Risk}|[===------] 35%|Jan 8|
+|Documentation|{badge:Complete}|[=========] 100%|Done|
+</>
+
+---
+
+## Recent Activity
+
+[activity: Sarah completed "Design Review" | 10 min ago]
+
+[activity: Mike commented on "API Endpoints" | 1 hour ago]
+
+[activity: Team meeting scheduled for tomorrow | 2 hours ago]
+
+[activity: New task assigned: "Update landing page" | 3 hours ago]
+
+---
+
+## Upcoming Deadlines
+
+[toast: API Integration due in 2 days | warning]
+
+[toast: Team standup in 30 minutes | info]
+
+---
+
+[fab: +]`,
+  },
+
+  // SaaS App Bundle - Projects List
+  {
+    id: 'saas-projects',
+    name: '📊 SaaS App: Projects',
+    description: 'Projects list with filters and actions',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'SaaS App',
+    bundleOrder: 2,
+    source: `{TaskFlow - Projects}
+[[ 📊 TaskFlow | Dashboard | Projects | Team | Reports | [Upgrade] | (@PM) ]]
+
+>> Projects
+
+---
+
+## All Projects
+
+<card>
+[🔍___Search projects...___] [v All Status] [v All Teams] [+ New Project]
+</>
+
+---
+
+<card>
+### Website Redesign
+**Team Alpha** • 6 members
+
+[====------] 60% Complete
+
+12 tasks remaining • Due Jan 15
+
+{badge:In Progress} {badge:High Priority}
+
+[View] [Edit]
+</>
+
+<card>
+### Mobile App v2
+**Team Beta** • 4 members
+
+[========--] 80% Complete
+
+5 tasks remaining • Due Jan 10
+
+{badge:On Track} {badge:Medium Priority}
+
+[View] [Edit]
+</>
+
+<card>
+### API Integration
+**Team Alpha** • 3 members
+
+[===-------] 35% Complete
+
+18 tasks remaining • Due Jan 8
+
+{badge:At Risk} {badge:High Priority}
+
+[View] [Edit]
+</>
+
+---
+
+[< 1 2 3 ... 5 >]
+
+---
+
+[fab: +]`,
+  },
+
+  // SaaS App Bundle - Settings
+  {
+    id: 'saas-settings',
+    name: '📊 SaaS App: Settings',
+    description: 'Account and app settings page',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'wireframe',
+    thumbnail: 'wireframe',
+    bundle: 'SaaS App',
+    bundleOrder: 3,
+    source: `{TaskFlow - Settings}
+[[ 📊 TaskFlow | Dashboard | Projects | Team | Reports | [Upgrade] | (@PM) ]]
+
+>> Settings
+
+---
+
+<Sidebar>
+## Settings
+
+- 👤 Profile
+- 🔔 Notifications
+- 🔒 Security
+- 💳 Billing
+- 🎨 Appearance
+- 🔗 Integrations
+- 👥 Team
+</>
+
+<card>
+## Profile Settings
+
+---
+
+[img 1:1]
+
+[Upload Photo]
+
+---
+
+**Full Name**
+[____Sarah Johnson____]
+
+**Email**
+[____sarah@company.com____]
+
+**Role**
+[v Project Manager    ]
+
+**Timezone**
+[v UTC-5 (Eastern)    ]
+
+---
+
+**Bio**
+[________________________________________]
+[________________________________________]
+
+---
+
+[Save Changes]  [Cancel]
+</>
+
+---
+
+<card>
+## Notification Preferences
+
+---
+
+[x] Email notifications for task assignments
+[x] Push notifications for mentions
+[ ] Weekly summary email
+[x] Desktop notifications
+[ ] SMS alerts for urgent items
+
+---
+
+[Save Preferences]
+</>
+
+---
+
+[toast: Settings saved successfully | success]`,
+  },
+
+  // SaaS App Bundle - User Journey
+  {
+    id: 'saas-user-journey',
+    name: '📊 SaaS App: User Journey',
+    description: 'User flow through the SaaS application',
+    category: TEMPLATE_CATEGORIES.APP_BUNDLES,
+    type: 'journey',
+    thumbnail: 'journey',
+    bundle: 'SaaS App',
+    bundleOrder: 4,
+    source: `[user] Project Manager
+
+[screen:saas-dashboard] Dashboard
+[screen:saas-projects] Projects
+[screen:saas-settings] Settings
+[success] Task Complete
+
+Project Manager -> Dashboard
+Dashboard -view projects-> Projects
+Dashboard -settings-> Settings
+Projects -select-> Projects
+Projects -back-> Dashboard
+Settings -save-> Dashboard
+Projects -complete task-> Task Complete`,
   },
 
   // ============================================

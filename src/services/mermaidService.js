@@ -22,6 +22,14 @@ export function detectMermaidType(source) {
   if (trimmed.startsWith('c4context') || trimmed.startsWith('c4container') ||
       trimmed.startsWith('c4component') || trimmed.startsWith('c4dynamic') ||
       trimmed.startsWith('c4deployment')) return 'c4';
+  // Timeline
+  if (trimmed.startsWith('timeline')) return 'timeline';
+  // Quadrant Chart
+  if (trimmed.startsWith('quadrantchart')) return 'quadrant';
+  // Sankey
+  if (trimmed.startsWith('sankey')) return 'sankey';
+  // Requirement diagram
+  if (trimmed.startsWith('requirementdiagram')) return 'requirement';
 
   return null;
 }
@@ -66,14 +74,39 @@ function mermaidFlowchartToDDFlow(source) {
   // Helper to parse a node definition and extract id, label, type
   const parseNodeDef = (str) => {
     str = str.trim();
-    // Try different shape patterns
-    // [Label] - rectangle
-    let match = str.match(/^(\w+)\[([^\]]+)\]$/);
-    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'process' };
+    // Try different shape patterns (order matters - more specific first)
 
-    // {Label} - diamond/decision
-    match = str.match(/^(\w+)\{([^}]+)\}$/);
-    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'decision' };
+    // (((Label))) - double circle
+    let match = str.match(/^(\w+)\(\(\((.+)\)\)\)$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'start' };
+
+    // {{Label}} - hexagon
+    match = str.match(/^(\w+)\{\{(.+)\}\}$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'hexagon' };
+
+    // [[Label]] - subroutine
+    match = str.match(/^(\w+)\[\[(.+)\]\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'subroutine' };
+
+    // [/Label/] - parallelogram (input)
+    match = str.match(/^(\w+)\[\/(.+)\/\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'io' };
+
+    // [\Label\] - parallelogram alt (output)
+    match = str.match(/^(\w+)\[\\(.+)\\\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'io' };
+
+    // [/Label\] - trapezoid
+    match = str.match(/^(\w+)\[\/(.+)\\\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'trapezoid' };
+
+    // [\Label/] - trapezoid alt
+    match = str.match(/^(\w+)\[\\(.+)\/\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'trapezoid' };
+
+    // >Label] - asymmetric/flag
+    match = str.match(/^(\w+)>(.+)\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'flag' };
 
     // ((Label)) - circle
     match = str.match(/^(\w+)\(\(([^)]+)\)\)$/);
@@ -86,6 +119,14 @@ function mermaidFlowchartToDDFlow(source) {
     // [(Label)] - cylinder/database
     match = str.match(/^(\w+)\[\(([^)]+)\)\]$/);
     if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'database' };
+
+    // {Label} - diamond/decision
+    match = str.match(/^(\w+)\{([^}]+)\}$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'decision' };
+
+    // [Label] - rectangle
+    match = str.match(/^(\w+)\[([^\]]+)\]$/);
+    if (match) return { id: match[1], label: cleanLabel(match[2]), type: 'process' };
 
     // (Label) - stadium/pill shape (common in Mermaid)
     match = str.match(/^(\w+)\(([^)]+)\)$/);
@@ -122,9 +163,19 @@ function mermaidFlowchartToDDFlow(source) {
     }
 
     // Parse edges with inline node definitions: A[Label] -->|edge label| B(Label)
-    // Match pattern: NodeDef arrow (optional |label|) NodeDef
-    const edgePattern = /^(.+?)\s*(--+>|==+>|-\.+->?|--+)\s*(?:\|([^|]*)\|)?\s*(.+)$/;
-    const edgeMatch = line.match(edgePattern);
+    // Match pattern: NodeDef arrow (optional |label| or -- text -->) NodeDef
+    // Arrow types: -->, --->, ===>, -.->, --o, --x, ~~~, -- text -->
+    const edgePattern = /^(.+?)\s*(--+>|==+>|-\.+->?|--+o|--+x|~~~|--+)\s*(?:\|([^|]*)\|)?\s*(.+)$/;
+    let edgeMatch = line.match(edgePattern);
+
+    // Also check for "A -- text --> B" syntax
+    if (!edgeMatch) {
+      const altEdgePattern = /^(.+?)\s*--\s+([^-]+?)\s+-->\s*(.+)$/;
+      const altMatch = line.match(altEdgePattern);
+      if (altMatch) {
+        edgeMatch = [line, altMatch[1], '-->', altMatch[2].trim(), altMatch[3]];
+      }
+    }
 
     if (edgeMatch) {
       const [, fromPart, arrow, edgeLabel, toPart] = edgeMatch;
@@ -549,6 +600,57 @@ function mermaidSequenceToDDFlow(source) {
       return;
     }
 
+    // Parse par block: par Action
+    const parMatch = line.match(/^par\s+(.+)/i);
+    if (parMatch) {
+      ddflowLines.push(`par ${parMatch[1]}`);
+      return;
+    }
+
+    // Parse and block (inside par): and Another Action
+    const andMatch = line.match(/^and\s+(.+)/i);
+    if (andMatch) {
+      ddflowLines.push(`and ${andMatch[1]}`);
+      return;
+    }
+
+    // Parse critical block: critical Description
+    const criticalMatch = line.match(/^critical\s+(.+)/i);
+    if (criticalMatch) {
+      ddflowLines.push(`critical ${criticalMatch[1]}`);
+      return;
+    }
+
+    // Parse option block (inside critical): option Circumstance
+    const optionMatch = line.match(/^option\s+(.+)/i);
+    if (optionMatch) {
+      ddflowLines.push(`option ${optionMatch[1]}`);
+      return;
+    }
+
+    // Parse break block: break Description
+    const breakMatch = line.match(/^break\s+(.+)/i);
+    if (breakMatch) {
+      ddflowLines.push(`break ${breakMatch[1]}`);
+      return;
+    }
+
+    // Parse rect block (background highlighting): rect rgb(...)
+    const rectMatch = line.match(/^rect\s+(.+)/i);
+    if (rectMatch) {
+      ddflowLines.push(`rect ${rectMatch[1]}`);
+      return;
+    }
+
+    // Parse activate/deactivate
+    const activateMatch = line.match(/^(activate|deactivate)\s+(\w+)/i);
+    if (activateMatch) {
+      const participantId = activateMatch[2];
+      const participantName = participantAliases.get(participantId) || participantId;
+      ddflowLines.push(`${activateMatch[1].toLowerCase()} ${participantName}`);
+      return;
+    }
+
     // Parse end block
     if (line.toLowerCase() === 'end') {
       ddflowLines.push('end');
@@ -577,17 +679,33 @@ function mermaidSequenceToDDFlow(source) {
       return;
     }
 
-    // Parse message: A->>B: message or A-->>B: message
-    const msgMatch = line.match(/(\w+)\s*(-?->>?|-->>?)\s*(\w+)\s*:\s*(.+)/);
+    // Parse message: A->>B: message, A-->>B: message, A-xB: cross, A-)B: async
+    // Arrow types: ->>, -->, ->, ->>, -->, -x, --x, -), --)
+    // Also handle activation suffix: ->>+ (activate), ->>- (deactivate)
+    const msgMatch = line.match(/(\w+)\s*(-?->>?|-->>?|-x|--x|-\)|--\))([+-])?\s*(\w+)\s*:\s*(.+)/);
     if (msgMatch) {
-      const [, fromId, arrow, toId, msg] = msgMatch;
+      const [, fromId, arrow, activationSuffix, toId, msg] = msgMatch;
       const from = participantAliases.get(fromId) || fromId;
       const to = participantAliases.get(toId) || toId;
       const isDashed = arrow.startsWith('--');
+      const isCross = arrow.includes('x');
+      const isAsync = arrow.includes(')');
       participants.add(from);
       participants.add(to);
-      const ddflowArrow = isDashed ? '-->' : '->';
+
+      // Determine DDFlow arrow type
+      let ddflowArrow = isDashed ? '-->' : '->';
+      if (isCross) ddflowArrow = isDashed ? '--x' : '-x';
+      else if (isAsync) ddflowArrow = isDashed ? '--)' : '-)';
+
       ddflowLines.push(`${from} ${ddflowArrow} ${to}: ${msg}`);
+
+      // Handle activation suffix
+      if (activationSuffix === '+') {
+        ddflowLines.push(`activate ${to}`);
+      } else if (activationSuffix === '-') {
+        ddflowLines.push(`deactivate ${to}`);
+      }
     }
   });
 
@@ -676,15 +794,81 @@ function mermaidClassToDDFlow(source) {
 
 /**
  * Convert Mermaid state diagram to DDFlow state
+ * Supports: composite states, fork/join, choice, state descriptions
  */
 function mermaidStateToDDFlow(source) {
   const lines = source.split('\n').slice(1);
   const states = new Map();
   const transitions = [];
+  const compositeStack = []; // Track nested composite states
+  const stateDescriptions = new Map(); // state id -> description
 
   lines.forEach(line => {
     line = line.trim();
     if (!line || line.startsWith('%%')) return;
+
+    // State description: state "Description" as stateName
+    const stateDescMatch = line.match(/^state\s+"([^"]+)"\s+as\s+(\w+)/i);
+    if (stateDescMatch) {
+      const [, description, stateId] = stateDescMatch;
+      stateDescriptions.set(stateId, description);
+      if (!states.has(stateId)) states.set(stateId, { id: stateId });
+      return;
+    }
+
+    // State with description inline: stateName : description
+    const stateInlineDescMatch = line.match(/^(\w+)\s*:\s*([^{]+)$/);
+    if (stateInlineDescMatch && !line.includes('-->')) {
+      const [, stateId, description] = stateInlineDescMatch;
+      stateDescriptions.set(stateId, description.trim());
+      if (!states.has(stateId)) states.set(stateId, { id: stateId });
+      return;
+    }
+
+    // Composite state start: state CompositeName {
+    const compositeStartMatch = line.match(/^state\s+(\w+)\s*\{?\s*$/i);
+    if (compositeStartMatch) {
+      const stateId = compositeStartMatch[1];
+      if (!states.has(stateId)) {
+        states.set(stateId, { id: stateId, isComposite: true, children: [] });
+      } else {
+        const existing = states.get(stateId);
+        existing.isComposite = true;
+        existing.children = existing.children || [];
+      }
+      compositeStack.push(stateId);
+      return;
+    }
+
+    // End of composite state
+    if (line === '}') {
+      compositeStack.pop();
+      return;
+    }
+
+    // Fork/Join markers: state fork_state <<fork>> or state join_state <<join>>
+    const forkJoinMatch = line.match(/^state\s+(\w+)\s*<<(fork|join)>>/i);
+    if (forkJoinMatch) {
+      const [, stateId, type] = forkJoinMatch;
+      states.set(stateId, { id: stateId, specialType: type.toLowerCase() });
+      return;
+    }
+
+    // Choice marker: state condition <<choice>>
+    const choiceMatch = line.match(/^state\s+(\w+)\s*<<choice>>/i);
+    if (choiceMatch) {
+      const stateId = choiceMatch[1];
+      states.set(stateId, { id: stateId, specialType: 'choice' });
+      return;
+    }
+
+    // Note marker: state note_state <<note>>
+    const noteMatch = line.match(/^state\s+(\w+)\s*<<note>>/i);
+    if (noteMatch) {
+      const stateId = noteMatch[1];
+      states.set(stateId, { id: stateId, specialType: 'note' });
+      return;
+    }
 
     // Start state: [*] --> S1
     if (line.includes('[*]')) {
@@ -692,10 +876,22 @@ function mermaidStateToDDFlow(source) {
       const endMatch = line.match(/(\w+)\s*-->\s*\[\*\]/);
 
       if (startMatch) {
-        states.set(startMatch[1], { id: startMatch[1], isInitial: true });
+        const stateId = startMatch[1];
+        if (!states.has(stateId)) states.set(stateId, { id: stateId, isInitial: true });
+        else states.get(stateId).isInitial = true;
+
+        // Track as child of composite if inside one
+        if (compositeStack.length > 0) {
+          const parent = states.get(compositeStack[compositeStack.length - 1]);
+          if (parent && parent.children && !parent.children.includes(stateId)) {
+            parent.children.push(stateId);
+          }
+        }
       }
       if (endMatch) {
-        states.set(endMatch[1], { ...states.get(endMatch[1]), isFinal: true });
+        const stateId = endMatch[1];
+        if (!states.has(stateId)) states.set(stateId, { id: stateId, isFinal: true });
+        else states.get(stateId).isFinal = true;
       }
       return;
     }
@@ -707,19 +903,44 @@ function mermaidStateToDDFlow(source) {
       if (!states.has(from)) states.set(from, { id: from });
       if (!states.has(to)) states.set(to, { id: to });
       transitions.push({ from, to, event: event || '' });
+
+      // Track states as children of composite if inside one
+      if (compositeStack.length > 0) {
+        const parent = states.get(compositeStack[compositeStack.length - 1]);
+        if (parent && parent.children) {
+          if (!parent.children.includes(from)) parent.children.push(from);
+          if (!parent.children.includes(to)) parent.children.push(to);
+        }
+      }
     }
   });
 
   // Build DDFlow source
   const ddflowLines = [];
 
+  // Output special states (initial, final, fork, join, choice)
   states.forEach((state) => {
-    if (state.isInitial) ddflowLines.push(`(initial) ${state.id}`);
-    else if (state.isFinal) ddflowLines.push(`(final) ${state.id}`);
+    const desc = stateDescriptions.get(state.id);
+    const label = desc ? `${state.id}: ${desc}` : state.id;
+
+    if (state.isInitial) {
+      ddflowLines.push(`(initial) ${label}`);
+    } else if (state.isFinal) {
+      ddflowLines.push(`(final) ${label}`);
+    } else if (state.specialType === 'fork') {
+      ddflowLines.push(`(fork) ${label}`);
+    } else if (state.specialType === 'join') {
+      ddflowLines.push(`(join) ${label}`);
+    } else if (state.specialType === 'choice') {
+      ddflowLines.push(`(choice) ${label}`);
+    } else if (state.isComposite) {
+      ddflowLines.push(`(composite) ${label}`);
+    }
   });
 
   if (ddflowLines.length > 0) ddflowLines.push('');
 
+  // Output transitions
   transitions.forEach(({ from, to, event }) => {
     const line = event ? `${from} -> ${to}: ${event}` : `${from} -> ${to}`;
     ddflowLines.push(line);
@@ -780,36 +1001,122 @@ function mermaidERToDDFlow(source) {
 
 /**
  * Convert Mermaid Gantt chart to DDFlow gantt
+ * Supports: sections, task tags (done, active, crit, milestone), dependencies (after)
  */
 function mermaidGanttToDDFlow(source) {
   const lines = source.split('\n').slice(1);
-  const tasks = [];
+  const ddflowLines = [];
+  const taskMap = new Map(); // id -> task info for dependency resolution
   let currentSection = '';
   let dayOffset = 0;
+  let title = '';
 
   lines.forEach(line => {
     line = line.trim();
-    if (!line || line.startsWith('%%') || line.startsWith('title') || line.startsWith('dateFormat')) return;
+    if (!line || line.startsWith('%%')) return;
 
-    // Section
-    if (line.startsWith('section')) {
-      currentSection = line.replace('section', '').trim();
+    // Title
+    const titleMatch = line.match(/^title\s+(.+)/i);
+    if (titleMatch) {
+      title = titleMatch[1].trim();
       return;
     }
 
-    // Task: TaskName :id, start, duration
-    const taskMatch = line.match(/^(.+?)\s*:\s*(?:\w+,\s*)?(?:(\d+)d\s*,\s*)?(\d+)d?/);
+    // Skip dateFormat, axisFormat, excludes, etc.
+    if (/^(dateFormat|axisFormat|excludes|todayMarker|tickInterval|weekday)/i.test(line)) {
+      return;
+    }
+
+    // Section
+    if (line.toLowerCase().startsWith('section')) {
+      currentSection = line.replace(/^section\s*/i, '').trim();
+      ddflowLines.push(`== ${currentSection} ==`);
+      return;
+    }
+
+    // Task format: TaskName :tags, id, afterId/date, duration
+    // Examples:
+    //   Task A :a1, 2014-01-01, 30d
+    //   Task B :done, after a1, 20d
+    //   Task C :active, crit, a3, 2014-01-09, 3d
+    //   Milestone :milestone, m1, 0d
+    const taskMatch = line.match(/^(.+?)\s*:\s*(.+)$/);
     if (taskMatch) {
-      const [, name, start, duration] = taskMatch;
-      const startDay = start ? parseInt(start) : dayOffset;
-      const dur = parseInt(duration) || 1;
-      tasks.push({ name: name.trim(), start: startDay, duration: dur });
-      dayOffset = startDay + dur;
+      const taskName = taskMatch[1].trim();
+      const metadata = taskMatch[2].trim();
+
+      // Parse metadata parts
+      const parts = metadata.split(',').map(p => p.trim());
+
+      // Extract tags, id, dependency, dates, duration
+      const tags = [];
+      let taskId = null;
+      let afterId = null;
+      let startDate = null;
+      let duration = null;
+
+      parts.forEach(part => {
+        // Tags
+        if (/^(done|active|crit|milestone)$/i.test(part)) {
+          tags.push(part.toLowerCase());
+        }
+        // After dependency
+        else if (/^after\s+/i.test(part)) {
+          afterId = part.replace(/^after\s+/i, '').trim();
+        }
+        // Duration (with or without 'd')
+        else if (/^\d+d?$/.test(part)) {
+          duration = parseInt(part);
+        }
+        // Date (various formats)
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(part) || /^\d+$/.test(part)) {
+          if (!startDate) startDate = part;
+          else if (!duration) duration = parseInt(part);
+        }
+        // Task ID (alphanumeric)
+        else if (/^\w+$/.test(part) && !taskId) {
+          taskId = part;
+        }
+      });
+
+      // Default duration
+      if (!duration) duration = 1;
+
+      // Calculate start position
+      let start = dayOffset;
+      if (afterId && taskMap.has(afterId)) {
+        const depTask = taskMap.get(afterId);
+        start = depTask.start + depTask.duration;
+      } else if (startDate && /^\d+$/.test(startDate)) {
+        start = parseInt(startDate);
+      }
+
+      // Store task for dependency resolution
+      if (taskId) {
+        taskMap.set(taskId, { start, duration });
+      }
+
+      // Build DDFlow task line
+      let taskLine = `${taskName}, ${start}, ${duration}`;
+      if (tags.length > 0) {
+        taskLine += ` [${tags.join(', ')}]`;
+      }
+      if (afterId) {
+        taskLine += ` after:${afterId}`;
+      }
+
+      ddflowLines.push(taskLine);
+      dayOffset = start + duration;
     }
   });
 
-  // Build DDFlow source
-  return tasks.map(t => `${t.name}, ${t.start}, ${t.duration}`).join('\n');
+  // Add title at top if present
+  if (title) {
+    ddflowLines.unshift(`title: ${title}`);
+    ddflowLines.splice(1, 0, '');
+  }
+
+  return ddflowLines.join('\n');
 }
 
 /**
@@ -1357,6 +1664,276 @@ function mermaidC4ToDDFlow(source) {
 }
 
 /**
+ * Convert Mermaid timeline to DDFlow timeline
+ * Mermaid format: timeline
+ *   title History
+ *   2023 : Event 1 : Event 2
+ *   section Period
+ *     2024 : Event 3
+ */
+function mermaidTimelineToDDFlow(source) {
+  const lines = source.split('\n');
+  const ddflowLines = [];
+  let title = '';
+  let currentSection = '';
+
+  lines.forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('%%') || line.toLowerCase() === 'timeline') return;
+
+    // Title
+    const titleMatch = line.match(/^title\s+(.+)/i);
+    if (titleMatch) {
+      title = titleMatch[1].trim();
+      return;
+    }
+
+    // Section
+    const sectionMatch = line.match(/^section\s+(.+)/i);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].trim();
+      ddflowLines.push(`== ${currentSection} ==`);
+      return;
+    }
+
+    // Event: period : event1 : event2 or just period : event
+    const eventMatch = line.match(/^(.+?)\s*:\s*(.+)/);
+    if (eventMatch) {
+      const period = eventMatch[1].trim();
+      const events = eventMatch[2].split(':').map(e => e.trim()).filter(e => e);
+
+      events.forEach(event => {
+        ddflowLines.push(`${period}: ${event}`);
+      });
+    }
+  });
+
+  // Add title at the top if present
+  if (title) {
+    ddflowLines.unshift(`title: ${title}`);
+    ddflowLines.splice(1, 0, '');
+  }
+
+  return ddflowLines.join('\n');
+}
+
+/**
+ * Convert Mermaid quadrant chart to DDFlow quadrant
+ * Mermaid format:
+ *   quadrantChart
+ *   title Reach and engagement
+ *   x-axis Low Reach --> High Reach
+ *   y-axis Low Engagement --> High Engagement
+ *   quadrant-1 We should expand
+ *   quadrant-2 Need to promote
+ *   quadrant-3 Re-evaluate
+ *   quadrant-4 May be improved
+ *   Campaign A: [0.3, 0.6]
+ */
+function mermaidQuadrantToDDFlow(source) {
+  const lines = source.split('\n');
+  const ddflowLines = [];
+  let title = '';
+  const axes = { x: { left: '', right: '' }, y: { bottom: '', top: '' } };
+  const quadrants = {};
+  const points = [];
+
+  lines.forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('%%') || line.toLowerCase() === 'quadrantchart') return;
+
+    // Title
+    const titleMatch = line.match(/^title\s+(.+)/i);
+    if (titleMatch) {
+      title = titleMatch[1].trim();
+      return;
+    }
+
+    // X-axis: x-axis Low --> High or x-axis Low
+    const xMatch = line.match(/^x-axis\s+(.+?)(?:\s*-->\s*(.+))?$/i);
+    if (xMatch) {
+      axes.x.left = xMatch[1].trim();
+      axes.x.right = xMatch[2]?.trim() || '';
+      return;
+    }
+
+    // Y-axis: y-axis Low --> High or y-axis Low
+    const yMatch = line.match(/^y-axis\s+(.+?)(?:\s*-->\s*(.+))?$/i);
+    if (yMatch) {
+      axes.y.bottom = yMatch[1].trim();
+      axes.y.top = yMatch[2]?.trim() || '';
+      return;
+    }
+
+    // Quadrant labels: quadrant-1 Label
+    const quadMatch = line.match(/^quadrant-(\d)\s+(.+)/i);
+    if (quadMatch) {
+      quadrants[quadMatch[1]] = quadMatch[2].trim();
+      return;
+    }
+
+    // Point: Name: [x, y] or Name:::class: [x, y]
+    const pointMatch = line.match(/^(.+?)(?::::\w+)?:\s*\[([0-9.]+),\s*([0-9.]+)\]/);
+    if (pointMatch) {
+      points.push({
+        name: pointMatch[1].trim(),
+        x: parseFloat(pointMatch[2]),
+        y: parseFloat(pointMatch[3])
+      });
+    }
+  });
+
+  // Build DDFlow quadrant format
+  if (title) ddflowLines.push(`title: ${title}`);
+
+  // Axes
+  if (axes.x.left) {
+    ddflowLines.push(`x-axis: ${axes.x.left}${axes.x.right ? ' -> ' + axes.x.right : ''}`);
+  }
+  if (axes.y.bottom) {
+    ddflowLines.push(`y-axis: ${axes.y.bottom}${axes.y.top ? ' -> ' + axes.y.top : ''}`);
+  }
+
+  // Quadrant labels
+  Object.entries(quadrants).forEach(([num, label]) => {
+    ddflowLines.push(`quadrant-${num}: ${label}`);
+  });
+
+  ddflowLines.push('');
+
+  // Points
+  points.forEach(p => {
+    ddflowLines.push(`"${p.name}": [${p.x}, ${p.y}]`);
+  });
+
+  return ddflowLines.join('\n');
+}
+
+/**
+ * Convert Mermaid sankey diagram to DDFlow sankey
+ * Mermaid format: CSV-like source,target,value
+ *   sankey-beta
+ *   Agricultural 'waste',Bio-conversion,124.729
+ *   Bio-conversion,Liquid,0.597
+ */
+function mermaidSankeyToDDFlow(source) {
+  const lines = source.split('\n');
+  const ddflowLines = [];
+  const flows = [];
+
+  lines.forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('%%') || line.toLowerCase().startsWith('sankey')) return;
+
+    // Parse CSV: source,target,value (handles quoted values)
+    const parts = [];
+    let current = '';
+    let inQuote = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"' && !inQuote) {
+        inQuote = true;
+      } else if (char === '"' && inQuote) {
+        inQuote = false;
+      } else if (char === ',' && !inQuote) {
+        parts.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) parts.push(current.trim());
+
+    if (parts.length >= 3) {
+      const [src, target, value] = parts;
+      flows.push({ source: src, target, value: parseFloat(value) });
+    }
+  });
+
+  // Build DDFlow sankey format
+  flows.forEach(f => {
+    ddflowLines.push(`"${f.source}" -> "${f.target}": ${f.value}`);
+  });
+
+  return ddflowLines.join('\n');
+}
+
+/**
+ * Convert Mermaid requirement diagram to DDFlow requirement
+ * Mermaid format:
+ *   requirementDiagram
+ *   requirement test_req {
+ *     id: 1
+ *     text: the test
+ *     risk: high
+ *   }
+ */
+function mermaidRequirementToDDFlow(source) {
+  const lines = source.split('\n');
+  const ddflowLines = [];
+  const requirements = [];
+  let currentReq = null;
+
+  lines.forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('%%') || line.toLowerCase() === 'requirementdiagram') return;
+
+    // Requirement definition: requirement name { or functionalRequirement name {
+    const reqMatch = line.match(/^(requirement|functionalRequirement|interfaceRequirement|performanceRequirement|physicalRequirement|designConstraint)\s+(\w+)\s*\{?/i);
+    if (reqMatch) {
+      currentReq = { type: reqMatch[1], name: reqMatch[2], id: '', text: '', risk: '', verifyMethod: '' };
+      return;
+    }
+
+    // Element definition: element name {
+    const elemMatch = line.match(/^element\s+(\w+)\s*\{?/i);
+    if (elemMatch) {
+      currentReq = { type: 'element', name: elemMatch[1] };
+      return;
+    }
+
+    // End block
+    if (line === '}') {
+      if (currentReq) {
+        requirements.push(currentReq);
+        currentReq = null;
+      }
+      return;
+    }
+
+    // Properties inside block
+    if (currentReq) {
+      const propMatch = line.match(/^(\w+):\s*(.+)/);
+      if (propMatch) {
+        currentReq[propMatch[1]] = propMatch[2];
+      }
+    }
+
+    // Relations: element - satisfies -> requirement
+    const relMatch = line.match(/^(\w+)\s*-\s*(satisfies|traces|contains|copies|derives|verifies|refines)\s*->\s*(\w+)/i);
+    if (relMatch) {
+      ddflowLines.push(`${relMatch[1]} -${relMatch[2]}-> ${relMatch[3]}`);
+    }
+  });
+
+  // Build DDFlow requirement format
+  requirements.forEach(req => {
+    if (req.type === 'element') {
+      ddflowLines.unshift(`[element] ${req.name}: ${req.type || ''}`);
+    } else {
+      const props = [];
+      if (req.id) props.push(`id: ${req.id}`);
+      if (req.text) props.push(`"${req.text}"`);
+      if (req.risk) props.push(`risk: ${req.risk}`);
+      ddflowLines.unshift(`[${req.type}] ${req.name}: ${props.join(', ')}`);
+    }
+  });
+
+  return ddflowLines.join('\n');
+}
+
+/**
  * Convert Mermaid source to DDFlow DSL
  * @param {string} mermaidSource - Mermaid diagram source
  * @returns {{ type: string, source: string }} DDFlow type and source
@@ -1365,7 +1942,7 @@ export function mermaidToDDFlow(mermaidSource) {
   const detectedType = detectMermaidType(mermaidSource);
 
   if (!detectedType) {
-    throw new Error('Could not detect Mermaid diagram type. Supported types: flowchart, sequence, class, state, erDiagram, gantt, pie, gitGraph, journey, mindmap, c4');
+    throw new Error('Could not detect Mermaid diagram type. Supported types: flowchart, sequence, class, state, erDiagram, gantt, pie, gitGraph, journey, mindmap, c4, timeline, quadrant, sankey, requirement');
   }
 
   let source = '';
@@ -1409,6 +1986,18 @@ export function mermaidToDDFlow(mermaidSource) {
     case 'c4':
       source = mermaidC4ToDDFlow(mermaidSource);
       type = 'architecture';
+      break;
+    case 'timeline':
+      source = mermaidTimelineToDDFlow(mermaidSource);
+      break;
+    case 'quadrant':
+      source = mermaidQuadrantToDDFlow(mermaidSource);
+      break;
+    case 'sankey':
+      source = mermaidSankeyToDDFlow(mermaidSource);
+      break;
+    case 'requirement':
+      source = mermaidRequirementToDDFlow(mermaidSource);
       break;
     default:
       throw new Error(`Unsupported Mermaid diagram type: ${type}`);

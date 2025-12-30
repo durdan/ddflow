@@ -56,6 +56,7 @@ const CATEGORY_ICONS = {
   [TEMPLATE_CATEGORIES.BUSINESS]: '💼',
   [TEMPLATE_CATEGORIES.NETWORK]: '🌐',
   [TEMPLATE_CATEGORIES.UI_DESIGN]: '📱',
+  [TEMPLATE_CATEGORIES.APP_BUNDLES]: '📦',
   'My Templates': '⭐',
 };
 
@@ -69,6 +70,7 @@ const CATEGORY_COLORS = {
   [TEMPLATE_CATEGORIES.BUSINESS]: COLORS.pink,
   [TEMPLATE_CATEGORIES.NETWORK]: COLORS.cyan,
   [TEMPLATE_CATEGORIES.UI_DESIGN]: COLORS.red,
+  [TEMPLATE_CATEGORIES.APP_BUNDLES]: COLORS.teal,
   'My Templates': COLORS.orange,
 };
 
@@ -284,24 +286,22 @@ function TemplateGallery({ isOpen, onClose, onApplyTemplate, theme }) {
       borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
     }),
     cardContent: {
-      padding: '14px 16px',
-    },
-    cardHeader: {
-      display: 'flex',
-      alignItems: 'flex-start',
-      justifyContent: 'space-between',
-      marginBottom: '8px',
+      padding: '16px',
+      minHeight: '100px',
     },
     cardTitle: {
-      color: isDark ? '#fff' : '#1e293b',
-      fontSize: '14px',
-      fontWeight: 600,
-      marginBottom: '4px',
+      color: isDark ? '#ffffff' : '#1e293b',
+      fontSize: '15px',
+      fontWeight: 700,
+      marginBottom: '8px',
+      lineHeight: 1.3,
     },
     cardDescription: {
-      color: isDark ? '#888' : '#64748b',
-      fontSize: '12px',
-      lineHeight: 1.4,
+      color: isDark ? '#aaaaaa' : '#64748b',
+      fontSize: '13px',
+      lineHeight: 1.5,
+      marginBottom: '12px',
+      minHeight: '36px',
     },
     cardMeta: {
       display: 'flex',
@@ -324,7 +324,15 @@ function TemplateGallery({ isOpen, onClose, onApplyTemplate, theme }) {
       color: COLORS.orange,
       borderRadius: '4px',
       fontSize: '10px',
+    },
+    bundleBadge: {
+      padding: '4px 10px',
+      background: `${COLORS.teal}25`,
+      color: COLORS.teal,
+      borderRadius: '6px',
+      fontSize: '10px',
       fontWeight: 600,
+      border: `1px solid ${COLORS.teal}40`,
     },
     deleteButton: {
       marginLeft: 'auto',
@@ -498,14 +506,13 @@ function TemplateGallery({ isOpen, onClose, onApplyTemplate, theme }) {
 
                     {/* Content */}
                     <div style={styles.cardContent}>
-                      <div style={styles.cardHeader}>
-                        <div>
-                          <div style={styles.cardTitle}>{template.name}</div>
-                          <div style={styles.cardDescription}>{template.description}</div>
-                        </div>
-                      </div>
+                      <div style={styles.cardTitle}>{template.name || 'Untitled'}</div>
+                      <div style={styles.cardDescription}>{template.description || 'No description'}</div>
                       <div style={styles.cardMeta}>
-                        <span style={styles.typeBadge(categoryColor)}>{template.type}</span>
+                        <span style={styles.typeBadge(categoryColor)}>{template.type?.toUpperCase()}</span>
+                        {template.bundle && (
+                          <span style={styles.bundleBadge}>{template.bundle}</span>
+                        )}
                         {template.isCustom && (
                           <>
                             <span style={styles.customBadge}>Custom</span>

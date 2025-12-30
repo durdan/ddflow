@@ -3,6 +3,7 @@ import rough from 'roughjs';
 import dagre from 'dagre';
 import AIChatPanel from './components/AIChatPanel.jsx';
 import TemplateGallery from './components/TemplateGallery.jsx';
+import { getTemplateById } from './services/templateService.js';
 import SaveTemplateModal from './components/SaveTemplateModal.jsx';
 import DropdownMenu from './components/DropdownMenu.jsx';
 import DiagramTypeSelector from './components/DiagramTypeSelector.jsx';
@@ -2640,8 +2641,25 @@ const Parsers = {
     text.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
-      const stateMatch = line.match(/^\((\w+)\)\s*(\w+)/);
-      if (stateMatch) { states.set(stateMatch[2], { id: stateMatch[2], label: stateMatch[2], isInitial: stateMatch[1] === 'initial', isFinal: stateMatch[1] === 'final' }); return; }
+      // State definition: (type) StateName or (type) StateName: Description
+      const stateMatch = line.match(/^\((\w+)\)\s*(\w+)(?::\s*(.+))?/);
+      if (stateMatch) {
+        const type = stateMatch[1].toLowerCase();
+        const id = stateMatch[2];
+        const description = stateMatch[3]?.trim() || '';
+        states.set(id, {
+          id,
+          label: description || id,
+          isInitial: type === 'initial',
+          isFinal: type === 'final',
+          isFork: type === 'fork',
+          isJoin: type === 'join',
+          isChoice: type === 'choice',
+          isComposite: type === 'composite',
+          stateType: type
+        });
+        return;
+      }
       const transMatch = line.match(/^(\w+)\s*->\s*(\w+)(?::\s*(.+))?/);
       if (transMatch) {
         if (!states.has(transMatch[1])) states.set(transMatch[1], { id: transMatch[1], label: transMatch[1] });
@@ -2683,14 +2701,16 @@ const Parsers = {
       line = line.trim();
       if (!line || line.startsWith('#') || line.toLowerCase().startsWith('title')) return;
 
-      const nodeMatch = line.match(/^[\[(](\w+)[\])]\s*(.+?)(?:\s*:\s*(.+))?$/);
+      // Match [type:linkedTemplate] Label or [type] Label
+      const nodeMatch = line.match(/^[\[(](\w+)(?::([a-z0-9-]+))?[\])]\s*(.+?)(?:\s*:\s*(.+))?$/i);
       if (nodeMatch && !line.includes('->')) {
         const type = nodeMatch[1].toLowerCase();
-        const label = nodeMatch[2].trim();
-        const description = nodeMatch[3]?.trim() || '';
+        const linkedTemplate = nodeMatch[2] || null; // e.g., "ecommerce-home"
+        const label = nodeMatch[3].trim();
+        const description = nodeMatch[4]?.trim() || '';
         const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
         const config = typeConfig[type] || typeConfig.default;
-        if (!nodeMap.has(id)) nodeMap.set(id, { id, label, description, type, ...config, x: 0, y: 0 });
+        if (!nodeMap.has(id)) nodeMap.set(id, { id, label, description, type, linkedTemplate, clickable: !!linkedTemplate, ...config, x: 0, y: 0 });
         return;
       }
 
@@ -2782,8 +2802,8 @@ const Parsers = {
         return;
       }
 
-      // Parse loop/alt/opt block start
-      const blockMatch = line.match(/^(loop|alt|opt)\s+(.+)/i);
+      // Parse loop/alt/opt/par/critical/break/rect block start
+      const blockMatch = line.match(/^(loop|alt|opt|par|critical|break|rect)\s+(.+)/i);
       if (blockMatch) {
         fragmentStack.push({
           type: blockMatch[1].toLowerCase(),
@@ -2801,6 +2821,40 @@ const Parsers = {
         if (current.type === 'alt') {
           current.sections.push({ label: elseMatch[1] || 'else', startIndex: messageIndex });
         }
+        return;
+      }
+
+      // Parse and block (for par)
+      const andMatch = line.match(/^and\s+(.+)/i);
+      if (andMatch && fragmentStack.length > 0) {
+        const current = fragmentStack[fragmentStack.length - 1];
+        if (current.type === 'par') {
+          current.sections.push({ label: andMatch[1], startIndex: messageIndex });
+        }
+        return;
+      }
+
+      // Parse option block (for critical)
+      const optionMatch = line.match(/^option\s+(.+)/i);
+      if (optionMatch && fragmentStack.length > 0) {
+        const current = fragmentStack[fragmentStack.length - 1];
+        if (current.type === 'critical') {
+          current.sections.push({ label: optionMatch[1], startIndex: messageIndex });
+        }
+        return;
+      }
+
+      // Parse activate/deactivate
+      const activateMatch = line.match(/^(activate|deactivate)\s+(\w+)/i);
+      if (activateMatch) {
+        const action = activateMatch[1].toLowerCase();
+        const participantId = activateMatch[2].toLowerCase().replace(/\s/g, '_');
+        // Add activation marker to messages
+        messages.push({
+          type: action,
+          participant: participantId,
+          index: messageIndex
+        });
         return;
       }
 
@@ -2853,8 +2907,9 @@ const Parsers = {
         return;
       }
 
-      // Parse message: A -> B: message or A --> B: message
-      const msgMatch = line.match(/^(\w+)\s*(->|-->)\s*(\w+)(?::\s*(.+))?/);
+      // Parse message: A -> B: message, A --> B: message, A -x B: lost, A -) B: async
+      // Arrow types: ->, -->, -x, --x, -), --)
+      const msgMatch = line.match(/^(\w+)\s*(->|-->|-x|--x|-\)|--\))\s*(\w+)(?::\s*(.+))?/);
       if (msgMatch) {
         const fromId = msgMatch[1].toLowerCase().replace(/\s/g, '_');
         const toId = msgMatch[3].toLowerCase().replace(/\s/g, '_');
@@ -2992,8 +3047,11 @@ const Parsers = {
     const elements = [];
     let y = 20, x = 20, containerStack = [], currentRow = null;
     let sidebarMode = false, sidebarStartY = 0, mainContentEndY = 0;
-    const width = 480;
+    // Check if text has sidebar sections to adjust widths accordingly
+    const hasSidebar = /sidebar|aside|slip|cart|panel|summary/i.test(text) && /<\s*(sidebar|aside|slip|cart|panel|summary)/i.test(text);
+    const width = hasSidebar ? 480 : 620; // Wider when no sidebar
     const sidebarWidth = 200;
+    const fullWidth = hasSidebar ? width + sidebarWidth + 30 : width + 40; // Total canvas width
 
     const getX = () => {
       if (sidebarMode) return width + 30;
@@ -3012,10 +3070,10 @@ const Parsers = {
       
       const currX = getX(), currW = getWidth();
       
-      // Window/Frame: {Title}
-      if (trimmed.match(/^\{(.+)\}$/)) {
-        // Window spans full width including sidebar area
-        elements.push({ id: `wf-${i}`, type: 'window', label: trimmed.slice(1, -1), x: currX, y, width: width + sidebarWidth + 30, height: 36 });
+      // Window/Frame: {Title} - but NOT badges like {badge:...} or {tag:...}
+      if (trimmed.match(/^\{(.+)\}$/) && !trimmed.match(/\{(badge|tag):/i)) {
+        // Window spans full width
+        elements.push({ id: `wf-${i}`, type: 'window', label: trimmed.slice(1, -1), x: currX, y, width: fullWidth, height: 36 });
         y += 46; return;
       }
       
@@ -3027,13 +3085,15 @@ const Parsers = {
         if (isSidebar && !sidebarMode) {
           sidebarMode = true;
           mainContentEndY = y;
-          sidebarStartY = 80; // Start sidebar near top, after window
+          sidebarStartY = 145; // Start sidebar after window + navbar + breadcrumbs
           y = sidebarStartY;
         }
-        const card = { id: `wf-${i}`, type: 'card', label: label === 'card' ? '' : label, x: currX, y, width: currW, startY: y, children: [], isSidebar };
+        // Hide label for generic card names (card, sidebar, aside, panel, etc.)
+        const hideLabel = label === 'card' || /^(sidebar|aside|panel|slip|summary|cart)$/i.test(label);
+        const card = { id: `wf-${i}`, type: 'card', label: hideLabel ? '' : label, x: currX, y, width: currW, startY: y, children: [], isSidebar };
         elements.push(card);
         containerStack.push(card);
-        y += label && label !== 'card' ? 45 : 15;
+        y += hideLabel ? 15 : 45;
         return;
       }
 
@@ -3060,8 +3120,8 @@ const Parsers = {
       // Navbar: [[ item1 | item2 | item3 ]]
       if (trimmed.match(/^\[\[(.+)\]\]$/)) {
         const items = trimmed.slice(2, -2).split('|').map(s => s.trim());
-        // Navbar spans full width including sidebar area
-        elements.push({ id: `wf-${i}`, type: 'navbar', items, x: currX, y, width: width + sidebarWidth + 30, height: 44 });
+        // Navbar spans full width
+        elements.push({ id: `wf-${i}`, type: 'navbar', items, x: currX, y, width: fullWidth, height: 44 });
         y += 54; return;
       }
       
@@ -3079,9 +3139,32 @@ const Parsers = {
         y += 35; return;
       }
       
-      // Search bar: [🔍 placeholder...]
-      if (trimmed.match(/^\[🔍\s*(.*)?\]$/) || trimmed.match(/^\[search:?\s*(.*)\]$/i)) {
-        const label = trimmed.match(/^\[🔍\s*(.*)?\]$/)?.[1] || trimmed.match(/^\[search:?\s*(.*)\]$/i)?.[1] || 'Search...';
+      // Toolbar row: multiple elements like [🔍 Search] [v Filter] [+ Add] on one line
+      const toolbarMatches = trimmed.match(/\[[^\]]+\]/g);
+      if (toolbarMatches && toolbarMatches.length > 1) {
+        const items = toolbarMatches.map(item => {
+          const inner = item.slice(1, -1).trim();
+          // Detect type: search, dropdown, button
+          if (inner.startsWith('🔍') || inner.toLowerCase().startsWith('search')) {
+            return { type: 'search', label: inner.replace(/^🔍\s*/, '').replace(/^search:?\s*/i, '').replace(/_/g, ' ').trim() || 'Search...' };
+          }
+          if (inner.startsWith('v ') || inner.toLowerCase().startsWith('select:')) {
+            return { type: 'dropdown', label: inner.replace(/^v\s+/, '').replace(/^select:\s*/i, '') };
+          }
+          if (inner.startsWith('+') || inner.startsWith('+ ')) {
+            return { type: 'button', label: inner, variant: 'primary' };
+          }
+          return { type: 'button', label: inner, variant: 'secondary' };
+        });
+        elements.push({ id: `wf-${i}`, type: 'toolbar', items, x: currX, y, width: currW, height: 44 });
+        y += 54; return;
+      }
+
+      // Search bar: [🔍 placeholder...] or [🔍___placeholder___] or [search: placeholder]
+      if (trimmed.match(/^\[🔍[\s_]*(.*)[\s_]*\]$/) || trimmed.match(/^\[search:?\s*(.*)\]$/i)) {
+        let label = trimmed.match(/^\[🔍[\s_]*(.*)[\s_]*\]$/)?.[1] || trimmed.match(/^\[search:?\s*(.*)\]$/i)?.[1] || 'Search...';
+        // Clean up underscores from the label
+        label = label.replace(/^_+|_+$/g, '').replace(/_+/g, ' ').trim() || 'Search...';
         elements.push({ id: `wf-${i}`, type: 'search', label, x: currX, y, width: currW, height: 40 });
         y += 50; return;
       }
@@ -3120,16 +3203,21 @@ const Parsers = {
         y += 45; return;
       }
       
-      // Progress bar: [||||....] or [progress: 75%]
-      if (trimmed.match(/^\[\|+\.+\]$/) || trimmed.match(/^\[progress:\s*(\d+)%?\]$/i)) {
+      // Progress bar: [||||....] or [===---] or [progress: 75%] with optional label - multiple formats supported
+      if (trimmed.match(/^\[\|+\.+\]/) || trimmed.match(/^\[=+-+\]/) || trimmed.match(/^\[progress:\s*(\d+)%?\]/i)) {
         let value = 50;
-        const pctMatch = trimmed.match(/^\[progress:\s*(\d+)%?\]$/i);
-        if (pctMatch) value = parseInt(pctMatch[1]);
+        let label = '';
+        const pctMatch = trimmed.match(/^\[progress:\s*(\d+)%?\](.*)$/i);
+        if (pctMatch) { value = parseInt(pctMatch[1]); label = pctMatch[2]?.trim() || ''; }
         else {
-          const barMatch = trimmed.match(/^\[(\|*)(\.+)\]$/);
-          if (barMatch) value = Math.round((barMatch[1].length / (barMatch[1].length + barMatch[2].length)) * 100);
+          // Try pipe/dot format first: [||||....] optional label
+          const barMatch = trimmed.match(/^\[(\|+)(\.+)\]\s*(.*)$/);
+          if (barMatch) { value = Math.round((barMatch[1].length / (barMatch[1].length + barMatch[2].length)) * 100); label = barMatch[3] || ''; }
+          // Try equals/dash format: [===---] optional label
+          const eqMatch = trimmed.match(/^\[(=+)(-+)\]\s*(.*)$/);
+          if (eqMatch) { value = Math.round((eqMatch[1].length / (eqMatch[1].length + eqMatch[2].length)) * 100); label = eqMatch[3] || ''; }
         }
-        elements.push({ id: `wf-${i}`, type: 'progress', value, x: currX, y, width: currW - 20 });
+        elements.push({ id: `wf-${i}`, type: 'progress', value, label, x: currX, y, width: currW - 20 });
         y += 35; return;
       }
       
@@ -3146,6 +3234,37 @@ const Parsers = {
         y += 55; return;
       }
       
+      // Image row: [img ...] [img ...] [img ...] (multiple images on one line)
+      if (trimmed.match(/^\[img[^\]]*\](\s+\[img[^\]]*\])+$/i)) {
+        const images = trimmed.match(/\[img[^\]]*\]/gi) || [];
+        const count = images.length;
+        const imgWidth = Math.floor((currW - (count - 1) * 8) / count);
+        images.forEach((img, idx) => {
+          const ratioMatch = img.match(/(\d+):(\d+)/);
+          const ratio = ratioMatch ? parseInt(ratioMatch[1]) / parseInt(ratioMatch[2]) : 1;
+          const h = Math.min(Math.round(imgWidth / ratio), 100);
+          elements.push({ id: `wf-${i}-${idx}`, type: 'image', label: '', x: currX + idx * (imgWidth + 8), y, width: imgWidth, height: h });
+        });
+        y += 115; return;
+      }
+
+      // Badge/Tag: {badge:label} or {badge:variant:label} or {tag:label} - handles multiple badges on one line
+      const badgeMatches = trimmed.match(/\{(badge|tag):([^}]+)\}/gi);
+      if (badgeMatches && badgeMatches.length > 0) {
+        // Parse all badges on this line
+        const badges = badgeMatches.map(badgeStr => {
+          const match = badgeStr.match(/\{(badge|tag):([^}]+)\}/i);
+          const content = match[2].trim();
+          // Check if format is {badge:variant:label} like {badge:success:Done}
+          const variantMatch = content.match(/^(success|warning|error|info|new|beta|pro):(.+)$/i);
+          const variant = variantMatch ? variantMatch[1].toLowerCase() : null;
+          const label = variantMatch ? variantMatch[2] : content;
+          return { variant, label };
+        });
+        elements.push({ id: `wf-${i}`, type: 'badge-group', badges, x: currX, y });
+        y += 35; return;
+      }
+
       // Image placeholder: [img] or [img: caption] or [img 16:9]
       if (trimmed.match(/^\[img[:\s]?.*\]$/i)) {
         const caption = trimmed.match(/^\[img:\s*(.+)\]$/i)?.[1] || '';
@@ -3342,39 +3461,216 @@ const Parsers = {
         y += 20; return;
       }
       
-      // Original elements below:
+      // ===== HIGH-FIDELITY UI COMPONENTS (MUST BE BEFORE GENERIC PATTERNS) =====
 
-      // Window (already handled above)
+      // Hero section: [hero: Title | Subtitle | CTA Button]
+      if (trimmed.match(/^\[hero:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[hero:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'hero', title: parts[0], subtitle: parts[1] || '', cta: parts[2] || 'Get Started', x: currX, y, width: currW, height: 280 });
+        y += 300; return;
+      }
 
-      // Chat message/bubble: [User: message] or [Bot: message] or [ChatGPT: message] etc.
-      const chatMatch = trimmed.match(/^\[(\w+):\s*(.+)\]$/);
-      if (chatMatch) {
-        const sender = chatMatch[1];
-        const message = chatMatch[2];
+      // Pricing card: [pricing: Plan | $price | feature1, feature2, feature3 | CTA]
+      if (trimmed.match(/^\[pricing:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[pricing:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        const features = parts[2] ? parts[2].split(',').map(s => s.trim()) : [];
+        elements.push({ id: `wf-${i}`, type: 'pricing-card', plan: parts[0], price: parts[1] || '$0', features, cta: parts[3] || 'Choose Plan', x: currX, y, width: Math.min(280, currW), height: 320 });
+        y += 340; return;
+      }
+
+      // Feature card: [feature: 🚀 | Title | Description]
+      if (trimmed.match(/^\[feature:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[feature:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'feature-card', icon: parts[0] || '✨', title: parts[1] || 'Feature', description: parts[2] || '', x: currX, y, width: Math.min(300, currW), height: 160 });
+        y += 180; return;
+      }
+
+      // Stats widget: [stat: 1,234 | Label | +12%] or [stat: value | label]
+      if (trimmed.match(/^\[stat:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[stat:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'stat-widget', value: parts[0], label: parts[1] || '', trend: parts[2] || '', x: currX, y, width: Math.min(200, currW), height: 140 });
+        y += 160; return;
+      }
+
+      // Login form: [login-form] or [login-form: Title]
+      if (trimmed.match(/^\[login-form[:\s]*(.*)?\]$/i)) {
+        const title = trimmed.match(/^\[login-form:\s*(.+)\]$/i)?.[1] || 'Sign In';
+        elements.push({ id: `wf-${i}`, type: 'login-form', title, x: currX, y, width: Math.min(360, currW), height: 420 });
+        y += 440; return;
+      }
+
+      // Signup form: [signup-form] or [signup-form: Title]
+      if (trimmed.match(/^\[signup-form[:\s]*(.*)?\]$/i)) {
+        const title = trimmed.match(/^\[signup-form:\s*(.+)\]$/i)?.[1] || 'Create Account';
+        elements.push({ id: `wf-${i}`, type: 'signup-form', title, x: currX, y, width: Math.min(360, currW), height: 480 });
+        y += 500; return;
+      }
+
+      // Dashboard widget: [widget: Title | Value | Icon]
+      if (trimmed.match(/^\[widget:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[widget:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'dashboard-widget', title: parts[0], value: parts[1] || '', icon: parts[2] || '📊', x: currX, y, width: Math.min(200, currW), height: 120 });
+        y += 140; return;
+      }
+
+      // Mobile bottom nav: [bottom-nav: Home | Search | Cart | Profile]
+      if (trimmed.match(/^\[bottom-nav:\s*(.+)\]$/i)) {
+        const items = trimmed.match(/^\[bottom-nav:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'bottom-nav', items, x: currX, y, width: currW, height: 64 });
+        y += 80; return;
+      }
+
+      // Mobile app bar: [app-bar: Title | 🔔 | 👤]
+      if (trimmed.match(/^\[app-bar:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[app-bar:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'app-bar', title: parts[0], actions: parts.slice(1), x: currX, y, width: currW, height: 56 });
+        y += 70; return;
+      }
+
+      // FAB (Floating Action Button): [fab: +] or [fab: ✏️]
+      if (trimmed.match(/^\[fab:\s*(.+)\]$/i)) {
+        const icon = trimmed.match(/^\[fab:\s*(.+)\]$/i)[1];
+        elements.push({ id: `wf-${i}`, type: 'fab', icon, x: currX + currW - 70, y, width: 56, height: 56 });
+        y += 70; return;
+      }
+
+      // Toast/Notification: [toast: Message | success/error/warning/info]
+      if (trimmed.match(/^\[toast:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[toast:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'toast', message: parts[0], variant: parts[1] || 'info', x: currX, y, width: Math.min(400, currW), height: 56 });
+        y += 70; return;
+      }
+
+      // Empty state: [empty: Title | Description | CTA]
+      if (trimmed.match(/^\[empty:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[empty:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'empty-state', title: parts[0], description: parts[1] || '', cta: parts[2] || '', x: currX, y, width: currW, height: 240 });
+        y += 260; return;
+      }
+
+      // Error state: [error: Title | Description | Retry]
+      if (trimmed.match(/^\[error:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[error:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'error-state', title: parts[0], description: parts[1] || '', cta: parts[2] || 'Retry', x: currX, y, width: currW, height: 240 });
+        y += 260; return;
+      }
+
+      // Loading state: [loading] or [loading: text]
+      if (trimmed.match(/^\[loading[:\s]*(.*)?\]$/i)) {
+        const text = trimmed.match(/^\[loading:\s*(.+)\]$/i)?.[1] || 'Loading...';
+        elements.push({ id: `wf-${i}`, type: 'loading-state', text, x: currX, y, width: currW, height: 120 });
+        y += 140; return;
+      }
+
+      // Testimonial: [testimonial: "Quote" | Name | Title]
+      if (trimmed.match(/^\[testimonial:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[testimonial:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'testimonial', quote: parts[0]?.replace(/^["']|["']$/g, ''), name: parts[1] || 'John Doe', title: parts[2] || '', x: currX, y, width: Math.min(400, currW), height: 200 });
+        y += 220; return;
+      }
+
+      // Footer: [footer: Section1 :: Section2 :: Section3] or [footer: link1 | link2]
+      if (trimmed.match(/^\[footer:\s*(.+)\]$/i)) {
+        const content = trimmed.match(/^\[footer:\s*(.+)\]$/i)[1];
+        const sections = content.includes('::') ? content.split('::').map(s => s.split('|').map(l => l.trim())) : [content.split('|').map(s => s.trim())];
+        elements.push({ id: `wf-${i}`, type: 'footer', sections, copyright: '', x: currX, y, width: currW, height: 140 });
+        y += 160; return;
+      }
+
+      // Social links: [social: twitter | github | linkedin]
+      if (trimmed.match(/^\[social:\s*(.+)\]$/i)) {
+        const links = trimmed.match(/^\[social:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'social-links', links, x: currX, y, width: currW, height: 48 });
+        y += 60; return;
+      }
+
+      // CTA section: [cta: Title | Description | Button]
+      if (trimmed.match(/^\[cta:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[cta:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'cta-section', title: parts[0], description: parts[1] || '', cta: parts[2] || 'Get Started', x: currX, y, width: currW, height: 180 });
+        y += 200; return;
+      }
+
+      // Profile card: [profile: Name | @username | Bio]
+      if (trimmed.match(/^\[profile:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[profile:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'profile-card', name: parts[0], username: parts[1] || '', bio: parts[2] || '', x: currX, y, width: Math.min(300, currW), height: 280 });
+        y += 300; return;
+      }
+
+      // Activity feed item: [activity: User did action | 2h ago]
+      if (trimmed.match(/^\[activity:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[activity:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'activity-item', text: parts[0], time: parts[1] || 'Just now', x: currX, y, width: currW, height: 60 });
+        y += 70; return;
+      }
+
+      // Comment: [comment: Username | Comment text | time]
+      if (trimmed.match(/^\[comment:\s*(.+)\]$/i)) {
+        const parts = trimmed.match(/^\[comment:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'comment', username: parts[0], text: parts[1] || '', time: parts[2] || '', x: currX, y, width: currW, height: 100 });
+        y += 115; return;
+      }
+
+      // Code block: [code: language]
+      if (trimmed.match(/^\[code[:\s]*(.*)?\]$/i)) {
+        const language = trimmed.match(/^\[code:\s*(.+)\]$/i)?.[1] || 'javascript';
+        elements.push({ id: `wf-${i}`, type: 'code-block', language, x: currX, y, width: currW, height: 160 });
+        y += 180; return;
+      }
+
+      // File upload: [upload] or [upload: Drag files here]
+      if (trimmed.match(/^\[upload[:\s]*(.*)?\]$/i)) {
+        const label = trimmed.match(/^\[upload:\s*(.+)\]$/i)?.[1] || 'Drag and drop files here';
+        elements.push({ id: `wf-${i}`, type: 'upload', label, x: currX, y, width: currW, height: 160 });
+        y += 180; return;
+      }
+
+      // Accordion: [accordion: Title 1 | Title 2 | Title 3]
+      if (trimmed.match(/^\[accordion:\s*(.+)\]$/i)) {
+        const items = trimmed.match(/^\[accordion:\s*(.+)\]$/i)[1].split('|').map(s => s.trim());
+        elements.push({ id: `wf-${i}`, type: 'accordion', items, x: currX, y, width: currW, height: 60 + items.length * 50 });
+        y += 80 + items.length * 50; return;
+      }
+
+      // Data table with actions: [data-table: 5 rows]
+      if (trimmed.match(/^\[data-table:\s*(\d+)?\s*rows?\]$/i)) {
+        const rows = parseInt(trimmed.match(/^\[data-table:\s*(\d+)/i)?.[1] || '3');
+        elements.push({ id: `wf-${i}`, type: 'data-table', rows, x: currX, y, width: currW, height: 52 + rows * 52 });
+        y += 72 + rows * 52; return;
+      }
+
+      // ===== GENERIC PATTERNS (MUST BE AFTER SPECIFIC PATTERNS) =====
+
+      // Chat message/bubble: [User: message] or [Bot: message] - Only match common chat names
+      if (trimmed.match(/^\[(user|bot|assistant|chatgpt|ai|me|you|system):\s*(.+)\]$/i)) {
+        const match = trimmed.match(/^\[(\w+):\s*(.+)\]$/i);
+        const sender = match[1];
+        const message = match[2];
         const isUser = /user|me|you/i.test(sender);
         elements.push({ id: `wf-${i}`, type: 'chat-message', sender, message, isUser, x: currX, y, width: currW });
         y += 60; return;
       }
 
-      // Primary Button: [Label] (but not chat messages or special elements)
-      if (trimmed.match(/^\[(.+)\]$/) && !trimmed.match(/^\[_{2,}\]$/) && !trimmed.match(/^\[(x| )\]/i) && !trimmed.match(/^\[v\s/) && !trimmed.includes(':')) {
+      // Primary Button: [Label] (but not special elements with colons)
+      if (trimmed.match(/^\[([^\]:]+)\]$/) && !trimmed.match(/^\[_{2,}\]$/) && !trimmed.match(/^\[(x| )\]/i) && !trimmed.match(/^\[v\s/)) {
         elements.push({ id: `wf-${i}`, type: 'button', variant: 'primary', label: trimmed.slice(1, -1), x: currX, y, width: 120, height: 36 });
         y += 48; return;
       }
-      
+
       // Input: [____] or "placeholder"
       if (trimmed.match(/^\[_{2,}\]$/) || trimmed.match(/^"(.+)"$/)) {
         elements.push({ id: `wf-${i}`, type: 'input', label: trimmed.match(/^"(.+)"$/)?.[1] || '', x: currX, y, width: currW, height: 36 });
         y += 48; return;
       }
-      
+
       // Checkbox: [x] Label or [ ] Label
       const checkMatch = trimmed.match(/^\[(x| )\]\s*(.+)$/i);
       if (checkMatch) {
         elements.push({ id: `wf-${i}`, type: 'checkbox', checked: checkMatch[1].toLowerCase() === 'x', label: checkMatch[2], x: currX, y });
         y += 35; return;
       }
-      
+
       // Simple separator: --- or ===
       if (trimmed === '---' || trimmed === '===') {
         elements.push({ id: `wf-${i}`, type: 'separator', x: currX, y, width: currW, height: 2 });
@@ -4267,7 +4563,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
 }
 
 // User Journey with draggable nodes - supports both legacy and section-based formats
-function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
+function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes, onLinkedTemplateClick }) {
   // Check if this is the new section-based format
   if (data?.format === 'sections') {
     return <JourneySectionDiagram data={data} theme={theme} />;
@@ -4432,9 +4728,20 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onL
               );
             }
 
+            // Handle click on linked template node
+            const handleLinkedClick = (e) => {
+              if (node.linkedTemplate && onLinkedTemplateClick) {
+                e.stopPropagation();
+                onLinkedTemplateClick(node.linkedTemplate, node.label);
+              } else {
+                canvas.handleNodeClick(e, node.id);
+              }
+            };
+
             return (
-              <div key={node.id} onClick={(e) => canvas.handleNodeClick(e, node.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
+              <div key={node.id} onClick={handleLinkedClick} onDoubleClick={(e) => node.linkedTemplate && onLinkedTemplateClick ? onLinkedTemplateClick(node.linkedTemplate, node.label) : canvas.handleNodeDoubleClick(e, node.id, node.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, node.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, node.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, node.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 70, top: pos.y - 45, width: 140, height: 90, background: getNodeGradient(node.color), border: `2px solid ${isSelected ? COLORS.blue : node.linkedTemplate ? COLORS.cyan : node.color}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: node.linkedTemplate ? 'pointer' : (isDragging ? 'grabbing' : 'grab'), boxShadow: node.linkedTemplate ? `${getNodeShadow(node.color, isDragging, isSelected)}, 0 0 0 3px ${COLORS.cyan}30` : getNodeShadow(node.color, isDragging, isSelected), transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
                 {node.badge && <div style={{ position: 'absolute', top: -10, right: -10, background: COLORS.red, color: '#fff', fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 10 }}>{node.badge}</div>}
+                {node.linkedTemplate && <div style={{ position: 'absolute', top: -8, left: -8, background: COLORS.cyan, color: '#fff', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 3 }}>🔗 Click to open</div>}
                 <span style={{ fontSize: 22 }}>{node.icon}</span>
                 {canvas.editingNode === node.id ? (
                   <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? 14 : 11, fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, marginTop: 4 }} />
@@ -6989,136 +7296,250 @@ function DeploymentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLa
 
 function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
   const { elements, totalHeight } = data;
-  
+
+  // Helper to render inline markdown (bold **text**, strikethrough ~~text~~, badges {badge:label})
+  const renderInlineMarkdown = (text, baseStyle = {}) => {
+    if (!text) return text;
+    if (!text.includes('**') && !text.includes('~~') && !text.includes('{badge:') && !text.includes('{tag:')) return text;
+    // Split by bold, strikethrough, and badge patterns
+    const parts = text.split(/(\*\*[^*]+\*\*|~~[^~]+~~|\{(?:badge|tag):[^}]+\})/gi);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} style={{ fontWeight: 700, ...baseStyle }}>{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('~~') && part.endsWith('~~')) {
+        return <span key={i} style={{ textDecoration: 'line-through', opacity: 0.6 }}>{part.slice(2, -2)}</span>;
+      }
+      // Handle inline badges: {badge:label} or {badge:variant:label}
+      const badgeMatch = part.match(/^\{(?:badge|tag):([^}]+)\}$/i);
+      if (badgeMatch) {
+        const content = badgeMatch[1];
+        const variantMatch = content.match(/^(success|warning|error|info|new|beta|pro):(.+)$/i);
+        const badgeColors = { success: COLORS.green, warning: COLORS.orange, error: COLORS.red, info: COLORS.blue, new: COLORS.pink, beta: COLORS.purple, pro: COLORS.amber };
+        const variant = variantMatch ? variantMatch[1].toLowerCase() : null;
+        const label = variantMatch ? variantMatch[2] : content;
+        const color = badgeColors[variant] || COLORS.red;
+        return <span key={i} style={{ display: 'inline-flex', padding: '2px 8px', background: `${color}25`, border: `1px solid ${color}`, borderRadius: 10, color: color, fontSize: '0.7rem', fontWeight: 600, marginRight: 6 }}>{label}</span>;
+      }
+      return part;
+    });
+  };
+
+  // Premium styling helpers - theme-aware
+  const isLightTheme = theme.name === 'light';
+  const glass = isLightTheme ? {
+    light: { background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' },
+    medium: { background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' },
+    dark: { background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' },
+  } : {
+    light: { background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' },
+    medium: { background: 'rgba(255,255,255,0.06)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' },
+    dark: { background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' },
+  };
+  const shadows = isLightTheme ? {
+    sm: '0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.05)',
+    md: '0 4px 20px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.06)',
+    lg: '0 8px 40px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.08)',
+    xl: '0 20px 60px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.1)',
+    glow: (color) => `0 4px 20px ${color}30, 0 0 40px ${color}15`,
+    inset: 'inset 0 1px 0 rgba(255,255,255,0.5)',
+  } : {
+    sm: '0 2px 8px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.1)',
+    md: '0 4px 20px rgba(0,0,0,0.2), 0 2px 8px rgba(0,0,0,0.15)',
+    lg: '0 8px 40px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2)',
+    xl: '0 20px 60px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25)',
+    glow: (color) => `0 4px 20px ${color}40, 0 0 40px ${color}20`,
+    inset: 'inset 0 1px 0 rgba(255,255,255,0.1)',
+  };
+  const border = isLightTheme ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.15)';
+  const borderLight = isLightTheme ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
+  const borderMedium = isLightTheme ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.2)';
+  const borderStrong = isLightTheme ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.3)';
+  // Surface colors for backgrounds
+  const surface = {
+    low: isLightTheme ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)',
+    medium: isLightTheme ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)',
+    high: isLightTheme ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)',
+    elevated: isLightTheme ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)',
+    prominent: isLightTheme ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)',
+    overlay: isLightTheme ? 'rgba(255,255,255,0.95)' : 'rgba(30,30,40,0.95)',
+    code: isLightTheme ? 'rgba(0,0,0,0.04)' : 'rgba(0,0,0,0.4)',
+  };
+
   const renderElement = (el) => {
-    const base = { position: 'absolute', left: el.x, top: el.y, fontFamily: 'system-ui' };
-    
+    const base = { position: 'absolute', left: el.x, top: el.y, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' };
+
     switch (el.type) {
       case 'window':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: COLORS.slate, borderRadius: '8px 8px 0 0', display: 'flex', alignItems: 'center', padding: '0 12px' }}>
-            <div style={{ display: 'flex', gap: 6, marginRight: 12 }}>
-              <div style={{ width: 12, height: 12, borderRadius: '50%', background: COLORS.red }} />
-              <div style={{ width: 12, height: 12, borderRadius: '50%', background: COLORS.yellow }} />
-              <div style={{ width: 12, height: 12, borderRadius: '50%', background: COLORS.green }} />
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: isLightTheme ? 'linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%)' : 'linear-gradient(180deg, #2d3748 0%, #1a202c 100%)', borderRadius: '12px 12px 0 0', display: 'flex', alignItems: 'center', padding: '0 16px', boxShadow: shadows.lg, border: `1px solid ${border}` }}>
+            <div style={{ display: 'flex', gap: 8, marginRight: 16 }}>
+              <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(135deg, #ff6b6b, #ee5a5a)', boxShadow: '0 2px 4px rgba(238,90,90,0.4)' }} />
+              <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(135deg, #ffd93d, #f0c419)', boxShadow: '0 2px 4px rgba(240,196,25,0.4)' }} />
+              <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(135deg, #6bcf63, #4ade80)', boxShadow: '0 2px 4px rgba(74,222,128,0.4)' }} />
             </div>
-            <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 600 }}>{el.label}</span>
+            <span style={{ color: theme.textPrimary, fontSize: '0.9rem', fontWeight: 600, letterSpacing: '-0.01em' }}>{renderInlineMarkdown(el.label)}</span>
           </div>
         );
-        
+
       case 'card':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
-            {el.label && <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', borderRadius: '12px 12px 0 0', fontWeight: 600, color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</div>}
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.light, border: `1px solid ${border}`, borderRadius: 16, boxShadow: `${shadows.md}, ${shadows.inset}` }}>
+            {el.label && <div style={{ padding: '14px 18px', borderBottom: `1px solid ${borderLight}`, background: isLightTheme ? 'linear-gradient(180deg, rgba(0,0,0,0.02) 0%, transparent 100%)' : 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 100%)', borderRadius: '16px 16px 0 0', fontWeight: 600, color: theme.textPrimary, fontSize: '0.9rem', letterSpacing: '-0.01em' }}>{renderInlineMarkdown(el.label)}</div>}
           </div>
         );
-        
+
       case 'modal':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: theme.surface, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, boxShadow: '0 25px 50px rgba(0,0,0,0.5)' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontWeight: 600, color: theme.textPrimary }}>{el.label}</span>
-              <span style={{ color: theme.textMuted, cursor: 'pointer', fontSize: '1.2rem' }}>×</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.medium, border: `1px solid ${border}`, borderRadius: 20, boxShadow: shadows.xl }}>
+            <div style={{ padding: '18px 24px', borderBottom: `1px solid ${borderLight}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: isLightTheme ? 'linear-gradient(180deg, rgba(0,0,0,0.02) 0%, transparent 100%)' : 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%)', borderRadius: '20px 20px 0 0' }}>
+              <span style={{ fontWeight: 700, color: theme.textPrimary, fontSize: '1rem', letterSpacing: '-0.02em' }}>{renderInlineMarkdown(el.label)}</span>
+              <div style={{ width: 28, height: 28, borderRadius: 8, background: isLightTheme ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                <span style={{ color: theme.textSecondary, fontSize: '1rem', lineHeight: 1 }}>×</span>
+              </div>
             </div>
-            <div style={{ padding: 20, color: theme.textSecondary, fontSize: '0.85rem' }}>Modal content area...</div>
+            <div style={{ padding: 24, color: theme.textSecondary, fontSize: '0.9rem', lineHeight: 1.6 }}>Modal content area...</div>
           </div>
         );
-        
+
       case 'navbar':
+        // Check if first item has emoji/icon - if so, skip the default diamond
+        const firstItemHasEmoji = el.items[0] && /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/u.test(el.items[0]);
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(0,0,0,0.4)', borderRadius: 8, display: 'flex', alignItems: 'center', padding: '0 16px', gap: 24 }}>
-            <span style={{ fontWeight: 700, color: theme.textPrimary, fontSize: '1rem' }}>◆</span>
-            {el.items.map((item, i) => (
-              <span key={i} style={{ color: i === 0 ? COLORS.purple : theme.textSecondary, fontSize: '0.85rem', fontWeight: i === 0 ? 600 : 400 }}>{item}</span>
-            ))}
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.dark, borderRadius: 12, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 24, boxShadow: shadows.md, border: `1px solid ${borderLight}` }}>
+            {!firstItemHasEmoji && <span style={{ fontWeight: 800, color: theme.textPrimary, fontSize: '1.1rem', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>◆</span>}
+            {el.items.map((item, i) => {
+              const btnMatch = item.match(/^\[(.+)\]$/);
+              const avatarMatch = item.match(/^\((@?\w+)\)$/);
+              if (btnMatch) {
+                return <button key={i} style={{ padding: '8px 18px', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, color: '#fff', border: 'none', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', boxShadow: shadows.glow(COLORS.purple), transition: 'transform 0.2s, box-shadow 0.2s' }}>{btnMatch[1]}</button>;
+              }
+              if (avatarMatch) {
+                return <div key={i} style={{ width: 32, height: 32, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}40, ${COLORS.blue}40)`, border: `2px solid ${COLORS.purple}60`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 600, color: COLORS.purple }}>{avatarMatch[1].slice(0, 2).toUpperCase()}</div>;
+              }
+              return <span key={i} style={{ color: i === 0 ? COLORS.purple : theme.textSecondary, fontSize: '0.9rem', fontWeight: i === 0 ? 600 : 500, transition: 'color 0.2s' }}>{item}</span>;
+            })}
           </div>
         );
         
       case 'tabs':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', borderBottom: '2px solid rgba(255,255,255,0.1)' }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', gap: 4, background: surface.medium, padding: 4, borderRadius: 12, border: `1px solid ${borderLight}` }}>
             {el.items.map((item, i) => (
-              <div key={i} style={{ padding: '10px 20px', color: i === el.activeIndex ? COLORS.purple : theme.textSecondary, borderBottom: i === el.activeIndex ? `2px solid ${COLORS.purple}` : 'none', marginBottom: -2, fontSize: '0.85rem', fontWeight: i === el.activeIndex ? 600 : 400 }}>{item}</div>
+              <div key={i} style={{ padding: '10px 20px', color: i === el.activeIndex ? '#fff' : theme.textSecondary, background: i === el.activeIndex ? `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})` : 'transparent', borderRadius: 8, fontSize: '0.85rem', fontWeight: i === el.activeIndex ? 600 : 500, boxShadow: i === el.activeIndex ? shadows.glow(COLORS.purple) : 'none', transition: 'all 0.2s' }}>{item}</div>
             ))}
           </div>
         );
-        
+
       case 'breadcrumbs':
         return (
-          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 10 }}>
             {el.items.map((item, i) => (
               <React.Fragment key={i}>
-                <span style={{ color: i === el.items.length - 1 ? theme.textPrimary : COLORS.purple, fontSize: '0.8rem' }}>{item}</span>
-                {i < el.items.length - 1 && <span style={{ color: theme.textMuted }}>›</span>}
+                <span style={{ color: i === el.items.length - 1 ? theme.textPrimary : COLORS.purple, fontSize: '0.85rem', fontWeight: i === el.items.length - 1 ? 600 : 400 }}>{item}</span>
+                {i < el.items.length - 1 && <span style={{ color: theme.textMuted, opacity: 0.5 }}>›</span>}
               </React.Fragment>
             ))}
           </div>
         );
-        
+
       case 'search':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 20, display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10 }}>
-            <span style={{ fontSize: '1rem' }}>🔍</span>
-            <span style={{ color: theme.textMuted, fontSize: '0.85rem' }}>{el.label}</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.light, border: `1px solid ${border}`, borderRadius: 12, display: 'flex', alignItems: 'center', padding: '0 18px', gap: 12, boxShadow: shadows.sm }}>
+            <span style={{ fontSize: '1rem', opacity: 0.7 }}>🔍</span>
+            <span style={{ color: theme.textMuted, fontSize: '0.9rem' }}>{el.label}</span>
           </div>
         );
-        
+
+      case 'toolbar':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {el.items.map((item, idx) => {
+              if (item.type === 'search') {
+                return (
+                  <div key={idx} style={{ flex: 1, minWidth: 150, height: 38, ...glass.light, border: `1px solid ${border}`, borderRadius: 10, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, boxShadow: shadows.sm }}>
+                    <span style={{ fontSize: '0.9rem', opacity: 0.7 }}>🔍</span>
+                    <span style={{ color: theme.textMuted, fontSize: '0.85rem' }}>{item.label}</span>
+                  </div>
+                );
+              }
+              if (item.type === 'dropdown') {
+                return (
+                  <div key={idx} style={{ height: 38, ...glass.light, border: `1px solid ${borderMedium}`, borderRadius: 10, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 8, boxShadow: shadows.sm }}>
+                    <span style={{ color: theme.textPrimary, fontSize: '0.85rem', fontWeight: 500 }}>{item.label}</span>
+                    <span style={{ color: theme.textMuted, fontSize: '0.65rem' }}>▼</span>
+                  </div>
+                );
+              }
+              // Button
+              const isPrimary = item.variant === 'primary';
+              return (
+                <button key={idx} style={{ height: 38, padding: '0 16px', background: isPrimary ? `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})` : 'transparent', color: isPrimary ? '#fff' : theme.textPrimary, border: isPrimary ? 'none' : `1px solid ${borderMedium}`, borderRadius: 10, fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', boxShadow: isPrimary ? shadows.glow(COLORS.purple) : shadows.sm, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        );
+
       case 'dropdown':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px' }}>
-            <span style={{ color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</span>
-            <span style={{ color: theme.textMuted }}>▾</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.light, border: `1px solid ${borderMedium}`, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px', boxShadow: shadows.sm }}>
+            <span style={{ color: theme.textPrimary, fontSize: '0.9rem', fontWeight: 500 }}>{el.label}</span>
+            <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>▼</span>
           </div>
         );
-        
+
       case 'toggle':
         return (
-          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 24, borderRadius: 12, background: el.enabled ? COLORS.green : 'rgba(255,255,255,0.2)', position: 'relative', transition: 'background 0.2s' }}>
-              <div style={{ position: 'absolute', top: 2, left: el.enabled ? 22 : 2, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 52, height: 28, borderRadius: 14, background: el.enabled ? `linear-gradient(135deg, ${COLORS.green}, #22c55e)` : surface.prominent, position: 'relative', boxShadow: el.enabled ? shadows.glow(COLORS.green) : shadows.sm, transition: 'all 0.3s' }}>
+              <div style={{ position: 'absolute', top: 3, left: el.enabled ? 27 : 3, width: 22, height: 22, borderRadius: '50%', background: '#fff', boxShadow: '0 2px 8px rgba(0,0,0,0.2)', transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }} />
             </div>
-            <span style={{ color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</span>
+            <span style={{ color: theme.textPrimary, fontSize: '0.9rem', fontWeight: 500 }}>{el.label}</span>
           </div>
         );
-        
+
       case 'radio':
         return (
-          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${el.selected ? COLORS.purple : 'rgba(255,255,255,0.4)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {el.selected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: COLORS.purple }} />}
+          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 22, height: 22, borderRadius: '50%', border: `2px solid ${el.selected ? COLORS.purple : borderStrong}`, display: 'flex', alignItems: 'center', justifyContent: 'center', background: el.selected ? `${COLORS.purple}15` : 'transparent', boxShadow: el.selected ? shadows.glow(COLORS.purple) : 'none', transition: 'all 0.2s' }}>
+              {el.selected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})` }} />}
             </div>
-            <span style={{ color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</span>
+            <span style={{ color: theme.textPrimary, fontSize: '0.9rem', fontWeight: 500 }}>{el.label}</span>
           </div>
         );
-        
+
       case 'slider':
         return (
           <div key={el.id} style={{ ...base, width: el.width }}>
-            <div style={{ height: 6, background: 'rgba(255,255,255,0.2)', borderRadius: 3, position: 'relative' }}>
-              <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${el.value}%`, background: COLORS.purple, borderRadius: 3 }} />
-              <div style={{ position: 'absolute', top: -7, left: `${el.value}%`, transform: 'translateX(-50%)', width: 20, height: 20, borderRadius: '50%', background: '#fff', border: `3px solid ${COLORS.purple}` }} />
+            <div style={{ height: 8, background: surface.prominent, borderRadius: 4, position: 'relative', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)' }}>
+              <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${el.value}%`, background: `linear-gradient(90deg, ${COLORS.purple}, ${COLORS.blue})`, borderRadius: 4, boxShadow: shadows.glow(COLORS.purple) }} />
+              <div style={{ position: 'absolute', top: -8, left: `${el.value}%`, transform: 'translateX(-50%)', width: 24, height: 24, borderRadius: '50%', background: '#fff', border: `3px solid ${COLORS.purple}`, boxShadow: '0 2px 10px rgba(0,0,0,0.3)' }} />
             </div>
-            <div style={{ textAlign: 'right', fontSize: '0.75rem', color: theme.textSecondary, marginTop: 8 }}>{el.value}%</div>
+            <div style={{ textAlign: 'right', fontSize: '0.8rem', color: COLORS.purple, marginTop: 10, fontWeight: 600 }}>{el.value}%</div>
           </div>
         );
-        
+
       case 'progress':
         return (
           <div key={el.id} style={{ ...base, width: el.width }}>
-            <div style={{ height: 8, background: 'rgba(255,255,255,0.15)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${el.value}%`, background: `linear-gradient(90deg, ${COLORS.purple}, ${COLORS.blue})`, borderRadius: 4 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, height: 10, background: surface.prominent, borderRadius: 5, overflow: 'hidden', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)' }}>
+                <div style={{ height: '100%', width: `${el.value}%`, background: `linear-gradient(90deg, ${COLORS.purple}, ${COLORS.blue}, ${COLORS.cyan})`, borderRadius: 5, boxShadow: shadows.glow(COLORS.purple) }} />
+              </div>
+              <span style={{ fontSize: '0.8rem', color: theme.textSecondary, fontWeight: 600, whiteSpace: 'nowrap' }}>{el.label || `${el.value}%`}</span>
             </div>
-            <div style={{ textAlign: 'right', fontSize: '0.7rem', color: theme.textSecondary, marginTop: 4 }}>{el.value}%</div>
           </div>
         );
-        
+
       case 'avatar':
         return (
-          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.pink})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '1.1rem' }}>
+          <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 48, height: 48, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.pink})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '1.2rem', boxShadow: shadows.glow(COLORS.purple), border: '3px solid rgba(255,255,255,0.2)' }}>
               {el.label ? el.label.charAt(0).toUpperCase() : '👤'}
             </div>
-            {el.label && <span style={{ color: theme.textPrimary, fontSize: '0.9rem' }}>{el.label}</span>}
+            {el.label && <span style={{ color: theme.textPrimary, fontSize: '0.95rem', fontWeight: 600 }}>{el.label}</span>}
           </div>
         );
         
@@ -7126,32 +7547,32 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
         return (
           <div key={el.id} style={{ ...base, display: 'flex' }}>
             {Array.from({ length: Math.min(el.count, 5) }).map((_, i) => (
-              <div key={i} style={{ width: 36, height: 36, borderRadius: '50%', background: BRANCH_COLORS[i % BRANCH_COLORS.length], border: '2px solid #1a1a2e', marginLeft: i > 0 ? -12 : 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 600 }}>
+              <div key={i} style={{ width: 36, height: 36, borderRadius: '50%', background: BRANCH_COLORS[i % BRANCH_COLORS.length], border: `2px solid ${isLightTheme ? '#fff' : '#1a1a2e'}`, marginLeft: i > 0 ? -12 : 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 600 }}>
                 {String.fromCharCode(65 + i)}
               </div>
             ))}
-            {el.count > 5 && <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', border: '2px solid #1a1a2e', marginLeft: -12, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary, fontSize: '0.7rem' }}>+{el.count - 5}</div>}
+            {el.count > 5 && <div style={{ width: 36, height: 36, borderRadius: '50%', background: surface.prominent, border: `2px solid ${isLightTheme ? '#fff' : '#1a1a2e'}`, marginLeft: -12, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary, fontSize: '0.7rem' }}>+{el.count - 5}</div>}
           </div>
         );
-        
+
       case 'image':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.05)', border: '2px dashed rgba(255,255,255,0.2)', borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.high, border: `2px dashed ${borderMedium}`, borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
             <span style={{ fontSize: '2rem' }}>🖼️</span>
-            <span style={{ color: theme.textMuted, fontSize: '0.8rem' }}>{el.label || 'Image'}</span>
+            {el.label && <span style={{ color: theme.textMuted, fontSize: '0.8rem' }}>{el.label}</span>}
           </div>
         );
-        
+
       case 'video':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(0,0,0,0.3)', border: '2px dashed rgba(255,255,255,0.2)', borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: '1.5rem', marginLeft: 4 }}>▶</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: isLightTheme ? 'rgba(0,0,0,0.05)' : 'rgba(0,0,0,0.3)', border: `2px dashed ${borderMedium}`, borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <div style={{ width: 60, height: 60, borderRadius: '50%', background: surface.prominent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: '1.5rem', marginLeft: 4, color: theme.textPrimary }}>▶</span>
             </div>
             <span style={{ color: theme.textMuted, fontSize: '0.8rem' }}>{el.label || 'Video'}</span>
           </div>
         );
-        
+
       case 'map':
         return (
           <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(20,184,166,0.1)', border: '2px dashed rgba(20,184,166,0.3)', borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
@@ -7159,10 +7580,10 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
             <span style={{ color: COLORS.teal, fontSize: '0.8rem' }}>{el.label || 'Map'}</span>
           </div>
         );
-        
+
       case 'chart':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, padding: 16 }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 8, padding: 16 }}>
             <div style={{ height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', gap: 8 }}>
               {[60, 85, 45, 90, 55, 70].map((h, i) => (
                 <div key={i} style={{ width: '12%', height: `${h}%`, background: `linear-gradient(180deg, ${BRANCH_COLORS[i % BRANCH_COLORS.length]}, ${BRANCH_COLORS[i % BRANCH_COLORS.length]}88)`, borderRadius: '4px 4px 0 0' }} />
@@ -7170,10 +7591,10 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
             </div>
           </div>
         );
-        
+
       case 'calendar':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, padding: 12 }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 8, padding: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <span style={{ color: theme.textMuted }}>‹</span>
               <span style={{ color: theme.textPrimary, fontWeight: 600, fontSize: '0.85rem' }}>December 2024</span>
@@ -7195,12 +7616,12 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
             </div>
           </div>
         );
-        
+
       case 'table-row':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)', background: el.isHeader ? 'rgba(255,255,255,0.05)' : 'transparent' }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', borderBottom: `1px solid ${borderLight}`, background: el.isHeader ? surface.high : 'transparent' }}>
             {el.cells.map((cell, i) => (
-              <div key={i} style={{ flex: 1, padding: '8px 12px', color: el.isHeader ? theme.textPrimary : theme.textSecondary, fontSize: '0.8rem', fontWeight: el.isHeader ? 600 : 400, borderRight: i < el.cells.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>{cell}</div>
+              <div key={i} style={{ flex: 1, padding: '8px 12px', color: el.isHeader ? theme.textPrimary : theme.textSecondary, fontSize: '0.8rem', fontWeight: el.isHeader ? 600 : 400, borderRight: i < el.cells.length - 1 ? `1px solid ${borderLight}` : 'none' }}>{cell}</div>
             ))}
           </div>
         );
@@ -7225,11 +7646,26 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
         const badgeColors = { success: COLORS.green, warning: COLORS.orange, error: COLORS.red, info: COLORS.blue, new: COLORS.pink, beta: COLORS.purple, pro: COLORS.amber };
         const badgeColor = badgeColors[el.variant] || COLORS.purple;
         return (
-          <div key={el.id} style={{ ...base, display: 'inline-flex', padding: '4px 10px', background: `${badgeColor}25`, border: `1px solid ${badgeColor}`, borderRadius: 12, color: badgeColor, fontSize: '0.75rem', fontWeight: 600 }}>
+          <div key={el.id} style={{ ...base, display: 'inline-flex', padding: '5px 12px', background: `linear-gradient(135deg, ${badgeColor}30, ${badgeColor}15)`, border: `1px solid ${badgeColor}50`, borderRadius: 20, color: badgeColor, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase', boxShadow: `0 2px 8px ${badgeColor}25` }}>
             {el.label}
           </div>
         );
-        
+
+      case 'badge-group':
+        const bgColors = { success: COLORS.green, warning: COLORS.orange, error: COLORS.red, info: COLORS.blue, new: COLORS.pink, beta: COLORS.purple, pro: COLORS.amber };
+        return (
+          <div key={el.id} style={{ ...base, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {el.badges.map((badge, idx) => {
+              const color = bgColors[badge.variant] || COLORS.purple;
+              return (
+                <span key={idx} style={{ display: 'inline-flex', padding: '5px 12px', background: `linear-gradient(135deg, ${color}30, ${color}15)`, border: `1px solid ${color}50`, borderRadius: 20, color: color, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase', boxShadow: `0 2px 8px ${color}25` }}>
+                  {badge.label}
+                </span>
+              );
+            })}
+          </div>
+        );
+
       case 'alert':
         const alertConfig = { info: { color: COLORS.blue, icon: 'ℹ️' }, success: { color: COLORS.green, icon: '✓' }, warning: { color: COLORS.orange, icon: '⚠️' }, error: { color: COLORS.red, icon: '✗' } };
         const alertStyle = alertConfig[el.variant] || alertConfig.info;
@@ -7245,45 +7681,45 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
           <div key={el.id} style={{ ...base, width: el.width, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
             {Array.from({ length: el.total }).map((_, i) => (
               <React.Fragment key={i}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: i < el.current ? COLORS.green : i === el.current - 1 ? COLORS.purple : 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: i < el.current ? '#fff' : theme.textSecondary, fontSize: '0.8rem', fontWeight: 600 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: i < el.current ? COLORS.green : i === el.current - 1 ? COLORS.purple : surface.prominent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: i < el.current ? '#fff' : theme.textSecondary, fontSize: '0.8rem', fontWeight: 600 }}>
                   {i < el.current - 1 ? '✓' : i + 1}
                 </div>
-                {i < el.total - 1 && <div style={{ width: 40, height: 2, background: i < el.current - 1 ? COLORS.green : 'rgba(255,255,255,0.15)' }} />}
+                {i < el.total - 1 && <div style={{ width: 40, height: 2, background: i < el.current - 1 ? COLORS.green : surface.prominent }} />}
               </React.Fragment>
             ))}
           </div>
         );
-        
+
       case 'pagination':
         return (
           <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button style={{ width: 32, height: 32, background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer' }}>‹</button>
+            <button style={{ width: 32, height: 32, background: surface.prominent, border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer' }}>‹</button>
             {Array.from({ length: Math.min(el.total, 5) }).map((_, i) => {
               const page = i + 1;
               return (
-                <button key={i} style={{ width: 32, height: 32, background: page === el.current ? COLORS.purple : 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 6, color: page === el.current ? '#fff' : theme.textSecondary, cursor: 'pointer', fontSize: '0.8rem' }}>{page}</button>
+                <button key={i} style={{ width: 32, height: 32, background: page === el.current ? COLORS.purple : surface.prominent, border: 'none', borderRadius: 6, color: page === el.current ? '#fff' : theme.textSecondary, cursor: 'pointer', fontSize: '0.8rem' }}>{page}</button>
               );
             })}
             {el.total > 5 && <span style={{ color: theme.textMuted, padding: '0 8px' }}>...</span>}
-            {el.total > 5 && <button style={{ width: 32, height: 32, background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer', fontSize: '0.8rem' }}>{el.total}</button>}
-            <button style={{ width: 32, height: 32, background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer' }}>›</button>
+            {el.total > 5 && <button style={{ width: 32, height: 32, background: surface.prominent, border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer', fontSize: '0.8rem' }}>{el.total}</button>}
+            <button style={{ width: 32, height: 32, background: surface.prominent, border: 'none', borderRadius: 6, color: theme.textSecondary, cursor: 'pointer' }}>›</button>
           </div>
         );
-        
+
       case 'skeleton':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%)', backgroundSize: '200% 100%', borderRadius: 4, animation: 'shimmer 1.5s infinite' }} />
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: isLightTheme ? 'linear-gradient(90deg, rgba(0,0,0,0.04) 25%, rgba(0,0,0,0.08) 50%, rgba(0,0,0,0.04) 75%)' : 'linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%)', backgroundSize: '200% 100%', borderRadius: 4, animation: 'shimmer 1.5s infinite' }} />
         );
-        
+
       case 'textarea':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 8, padding: 12 }}>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.elevated, border: `1px solid ${borderMedium}`, borderRadius: 8, padding: 12 }}>
             <span style={{ color: theme.textMuted, fontSize: '0.85rem' }}>{el.label || 'Enter text...'}</span>
           </div>
         );
         
       case 'chat-message':
-        const msgBg = el.isUser ? COLORS.blue : 'rgba(255,255,255,0.1)';
+        const msgBg = el.isUser ? COLORS.blue : surface.prominent;
         const msgAlign = el.isUser ? 'flex-end' : 'flex-start';
         const msgRadius = el.isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px';
         return (
@@ -7297,44 +7733,45 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
 
       case 'button':
         const btnStyles = {
-          primary: { bg: COLORS.blue, border: COLORS.blue, color: '#fff' },
-          secondary: { bg: 'transparent', border: 'rgba(255,255,255,0.3)', color: theme.textPrimary },
-          ghost: { bg: 'transparent', border: 'transparent', color: COLORS.purple },
-          danger: { bg: COLORS.red, border: COLORS.red, color: '#fff' }
+          primary: { bg: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, border: 'transparent', color: '#fff', shadow: shadows.glow(COLORS.purple) },
+          secondary: { bg: surface.elevated, border: borderMedium, color: theme.textPrimary, shadow: shadows.sm },
+          ghost: { bg: 'transparent', border: 'transparent', color: COLORS.purple, shadow: 'none' },
+          danger: { bg: `linear-gradient(135deg, ${COLORS.red}, #dc2626)`, border: 'transparent', color: '#fff', shadow: shadows.glow(COLORS.red) },
+          success: { bg: `linear-gradient(135deg, ${COLORS.green}, #22c55e)`, border: 'transparent', color: '#fff', shadow: shadows.glow(COLORS.green) },
         };
         const btn = btnStyles[el.variant] || btnStyles.primary;
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: btn.bg, border: `2px solid ${btn.border}`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-            <span style={{ color: btn.color, fontSize: '0.85rem', fontWeight: 600 }}>{el.label}</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: btn.bg, border: `2px solid ${btn.border}`, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: btn.shadow, transition: 'all 0.2s' }}>
+            <span style={{ color: btn.color, fontSize: '0.9rem', fontWeight: 600, letterSpacing: '-0.01em' }}>{el.label}</span>
           </div>
         );
-        
+
       case 'icon-button':
         const icons = { menu: '☰', close: '✕', settings: '⚙', user: '👤', search: '🔍', home: '🏠', edit: '✏️', delete: '🗑️', add: '+', more: '⋯' };
         return (
-          <div key={el.id} style={{ ...base, width: 40, height: 40, background: 'rgba(255,255,255,0.1)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+          <div key={el.id} style={{ ...base, width: 40, height: 40, background: surface.prominent, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
             <span style={{ fontSize: '1.2rem' }}>{icons[el.icon] || el.icon}</span>
           </div>
         );
-        
+
       case 'divider-label':
         return (
           <div key={el.id} style={{ ...base, width: el.width, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.15)' }} />
+            <div style={{ flex: 1, height: 1, background: border }} />
             <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>{el.label}</span>
-            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.15)' }} />
+            <div style={{ flex: 1, height: 1, background: border }} />
           </div>
         );
-        
+
       case 'rating':
         return (
           <div key={el.id} style={{ ...base, display: 'flex', gap: 4 }}>
             {Array.from({ length: el.total }).map((_, i) => (
-              <span key={i} style={{ color: i < el.filled ? COLORS.amber : 'rgba(255,255,255,0.2)', fontSize: '1.2rem' }}>★</span>
+              <span key={i} style={{ color: i < el.filled ? COLORS.amber : borderMedium, fontSize: '1.2rem' }}>★</span>
             ))}
           </div>
         );
-        
+
       case 'chip-group':
         return (
           <div key={el.id} style={{ ...base, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -7343,10 +7780,10 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
             ))}
           </div>
         );
-        
+
       case 'tooltip':
         return (
-          <div key={el.id} style={{ ...base, width: 20, height: 20, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 600 }}>?</div>
+          <div key={el.id} style={{ ...base, width: 20, height: 20, borderRadius: '50%', background: surface.prominent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 600 }}>?</div>
         );
         
       case 'button-row':
@@ -7397,23 +7834,23 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
         
       case 'input':
         return (
-          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 8, display: 'flex', alignItems: 'center', padding: '0 12px' }}>
-            <span style={{ color: theme.textMuted, fontSize: '0.85rem' }}>{el.label || 'Enter text...'}</span>
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, ...glass.light, border: `1px solid ${borderMedium}`, borderRadius: 10, display: 'flex', alignItems: 'center', padding: '0 16px', boxShadow: `${shadows.sm}, inset 0 1px 2px rgba(0,0,0,0.1)`, transition: 'border-color 0.2s, box-shadow 0.2s' }}>
+            <span style={{ color: theme.textMuted, fontSize: '0.9rem', fontWeight: 400 }}>{el.label || 'Enter text...'}</span>
           </div>
         );
-        
+
       case 'checkbox':
         return (
           <div key={el.id} style={{ ...base, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 20, height: 20, border: `2px solid ${el.checked ? COLORS.blue : 'rgba(255,255,255,0.4)'}`, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: el.checked ? COLORS.blue : 'transparent' }}>
+            <div style={{ width: 20, height: 20, border: `2px solid ${el.checked ? COLORS.blue : borderStrong}`, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: el.checked ? COLORS.blue : 'transparent' }}>
               {el.checked && <span style={{ color: '#fff', fontSize: '0.75rem' }}>✓</span>}
             </div>
             <span style={{ color: theme.textPrimary, fontSize: '0.85rem' }}>{el.label}</span>
           </div>
         );
-        
+
       case 'separator':
-        return <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: 'rgba(255,255,255,0.15)' }} />;
+        return <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: border }} />;
         
       case 'text':
         const textStyles = {
@@ -7424,13 +7861,418 @@ function WireframeDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
           body: { fontSize: '0.9rem', fontWeight: 400, color: theme.textSecondary }
         };
         const textStyle = textStyles[el.textType] || textStyles.body;
-        return <div key={el.id} style={{ ...base, ...textStyle }}>{el.label}</div>;
-        
+        return <div key={el.id} style={{ ...base, ...textStyle }}>{renderInlineMarkdown(el.label, { color: theme.textPrimary })}</div>;
+
+      // ===== NEW HIGH-FIDELITY UI COMPONENTS =====
+
+      case 'hero':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: `linear-gradient(135deg, ${COLORS.purple}20, ${COLORS.blue}15, ${COLORS.cyan}10)`, borderRadius: 16, padding: '48px 40px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', border: `1px solid ${COLORS.purple}30`, boxShadow: `0 8px 32px ${COLORS.purple}15` }}>
+            <h1 style={{ color: theme.textPrimary, fontSize: '2.2rem', fontWeight: 800, marginBottom: 16, letterSpacing: '-0.02em', background: `linear-gradient(135deg, ${theme.textPrimary}, ${COLORS.purple})`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{el.title || 'Welcome to Our Platform'}</h1>
+            {el.subtitle && <p style={{ color: theme.textSecondary, fontSize: '1.1rem', maxWidth: 520, lineHeight: 1.6, marginBottom: 28 }}>{el.subtitle}</p>}
+            {el.cta && (
+              <button style={{ padding: '14px 32px', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, border: 'none', borderRadius: 10, color: '#fff', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', boxShadow: `0 4px 20px ${COLORS.purple}50`, transform: 'translateY(0)', transition: 'all 0.2s' }}>
+                {el.cta}
+              </button>
+            )}
+          </div>
+        );
+
+      case 'pricing-card':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: el.featured ? `linear-gradient(135deg, ${COLORS.purple}15, ${COLORS.blue}10)` : surface.low, border: `${el.featured ? 2 : 1}px solid ${el.featured ? COLORS.purple : border}`, borderRadius: 16, padding: '28px 24px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+            {el.featured && <div style={{ position: 'absolute', top: 12, right: -32, background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.pink})`, color: '#fff', fontSize: '0.7rem', fontWeight: 700, padding: '4px 40px', transform: 'rotate(45deg)' }}>POPULAR</div>}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ color: theme.textPrimary, fontSize: '1.2rem', fontWeight: 700, marginBottom: 8 }}>{el.plan || 'Pro Plan'}</h3>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                <span style={{ color: theme.textPrimary, fontSize: '2.5rem', fontWeight: 800 }}>{el.price || '$29'}</span>
+                <span style={{ color: theme.textMuted, fontSize: '0.9rem' }}>/month</span>
+              </div>
+            </div>
+            <div style={{ flex: 1, borderTop: `1px solid ${borderLight}`, paddingTop: 20 }}>
+              {(el.features || ['Feature 1', 'Feature 2', 'Feature 3']).map((f, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, color: theme.textSecondary, fontSize: '0.9rem' }}>
+                  <span style={{ color: COLORS.green, fontSize: '1rem' }}>✓</span>
+                  {f}
+                </div>
+              ))}
+            </div>
+            <button style={{ marginTop: 20, padding: '12px 20px', background: el.featured ? `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})` : surface.prominent, border: el.featured ? 'none' : `1px solid ${borderMedium}`, borderRadius: 10, color: el.featured ? '#fff' : theme.textPrimary, fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}>
+              {el.cta || 'Get Started'}
+            </button>
+          </div>
+        );
+
+      case 'feature-card':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 16, padding: '28px', display: 'flex', flexDirection: 'column', gap: 16, transition: 'all 0.2s', boxShadow: shadows.md }}>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: `${COLORS.purple}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem' }}>
+              {el.icon || '🚀'}
+            </div>
+            <h3 style={{ color: theme.textPrimary, fontSize: '1.1rem', fontWeight: 700 }}>{el.title || 'Feature Title'}</h3>
+            <p style={{ color: theme.textSecondary, fontSize: '0.9rem', lineHeight: 1.6 }}>{el.description || 'Feature description goes here with more details about this amazing capability.'}</p>
+          </div>
+        );
+
+      case 'stat-widget':
+        const trendColor = el.trend?.startsWith('+') ? COLORS.green : el.trend?.startsWith('-') ? COLORS.red : theme.textMuted;
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 14, padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ color: theme.textMuted, fontSize: '0.85rem', fontWeight: 500 }}>{el.label || 'Metric'}</span>
+              {el.trend && <span style={{ color: trendColor, fontSize: '0.8rem', fontWeight: 600, padding: '3px 8px', background: `${trendColor}15`, borderRadius: 6 }}>{el.trend}</span>}
+            </div>
+            <span style={{ color: theme.textPrimary, fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>{el.value || '1,234'}</span>
+            <div style={{ height: 32, display: 'flex', alignItems: 'flex-end', gap: 3, marginTop: 8 }}>
+              {[40, 65, 45, 80, 55, 70, 90, 60, 75, 85].map((h, i) => (
+                <div key={i} style={{ flex: 1, height: `${h}%`, background: `linear-gradient(180deg, ${COLORS.purple}80, ${COLORS.purple}40)`, borderRadius: 2 }} />
+              ))}
+            </div>
+          </div>
+        );
+
+      case 'login-form':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 20, padding: '36px 32px', display: 'flex', flexDirection: 'column', boxShadow: shadows.xl }}>
+            <div style={{ textAlign: 'center', marginBottom: 28 }}>
+              <div style={{ width: 56, height: 56, margin: '0 auto 16px', borderRadius: 14, background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>🔐</div>
+              <h2 style={{ color: theme.textPrimary, fontSize: '1.4rem', fontWeight: 700, marginBottom: 4 }}>{el.title || 'Welcome Back'}</h2>
+              <p style={{ color: theme.textMuted, fontSize: '0.85rem' }}>Sign in to your account</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1 }}>
+              <div>
+                <label style={{ color: theme.textSecondary, fontSize: '0.8rem', fontWeight: 500, marginBottom: 6, display: 'block' }}>Email</label>
+                <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '12px 14px', color: theme.textMuted, fontSize: '0.9rem' }}>you@example.com</div>
+              </div>
+              <div>
+                <label style={{ color: theme.textSecondary, fontSize: '0.8rem', fontWeight: 500, marginBottom: 6, display: 'block' }}>Password</label>
+                <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '12px 14px', color: theme.textMuted, fontSize: '0.9rem' }}>••••••••</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${borderStrong}` }} />
+                  <span style={{ color: theme.textSecondary, fontSize: '0.8rem' }}>Remember me</span>
+                </div>
+                <span style={{ color: COLORS.purple, fontSize: '0.8rem', cursor: 'pointer' }}>Forgot password?</span>
+              </div>
+            </div>
+            <button style={{ marginTop: 20, padding: '14px', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, border: 'none', borderRadius: 10, color: '#fff', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer' }}>Sign In</button>
+            <p style={{ textAlign: 'center', marginTop: 16, color: theme.textMuted, fontSize: '0.85rem' }}>Don't have an account? <span style={{ color: COLORS.purple, cursor: 'pointer' }}>Sign up</span></p>
+          </div>
+        );
+
+      case 'signup-form':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 20, padding: '36px 32px', display: 'flex', flexDirection: 'column', boxShadow: shadows.xl }}>
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <div style={{ width: 56, height: 56, margin: '0 auto 16px', borderRadius: 14, background: `linear-gradient(135deg, ${COLORS.green}, ${COLORS.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>✨</div>
+              <h2 style={{ color: theme.textPrimary, fontSize: '1.4rem', fontWeight: 700, marginBottom: 4 }}>{el.title || 'Create Account'}</h2>
+              <p style={{ color: theme.textMuted, fontSize: '0.85rem' }}>Start your journey today</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 500, marginBottom: 5, display: 'block' }}>First Name</label>
+                  <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '11px 12px', color: theme.textMuted, fontSize: '0.85rem' }}>John</div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 500, marginBottom: 5, display: 'block' }}>Last Name</label>
+                  <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '11px 12px', color: theme.textMuted, fontSize: '0.85rem' }}>Doe</div>
+                </div>
+              </div>
+              <div>
+                <label style={{ color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 500, marginBottom: 5, display: 'block' }}>Email</label>
+                <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '11px 12px', color: theme.textMuted, fontSize: '0.85rem' }}>john@example.com</div>
+              </div>
+              <div>
+                <label style={{ color: theme.textSecondary, fontSize: '0.75rem', fontWeight: 500, marginBottom: 5, display: 'block' }}>Password</label>
+                <div style={{ background: surface.high, border: `1px solid ${border}`, borderRadius: 10, padding: '11px 12px', color: theme.textMuted, fontSize: '0.85rem' }}>••••••••</div>
+              </div>
+            </div>
+            <button style={{ marginTop: 18, padding: '13px', background: `linear-gradient(135deg, ${COLORS.green}, ${COLORS.teal})`, border: 'none', borderRadius: 10, color: '#fff', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer' }}>Create Account</button>
+            <p style={{ textAlign: 'center', marginTop: 14, color: theme.textMuted, fontSize: '0.85rem' }}>Already have an account? <span style={{ color: COLORS.purple, cursor: 'pointer' }}>Sign in</span></p>
+          </div>
+        );
+
+      case 'dashboard-widget':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 14, padding: '18px 20px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ color: theme.textSecondary, fontSize: '0.85rem', fontWeight: 500 }}>{el.title || 'Widget'}</span>
+              <span style={{ fontSize: '1.2rem' }}>{el.icon || '📊'}</span>
+            </div>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+              <span style={{ color: theme.textPrimary, fontSize: '1.8rem', fontWeight: 800 }}>{el.value || '0'}</span>
+            </div>
+          </div>
+        );
+
+      case 'bottom-nav':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.overlay, borderRadius: '20px 20px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'space-around', padding: '0 16px', boxShadow: isLightTheme ? '0 -4px 20px rgba(0,0,0,0.1)' : '0 -4px 20px rgba(0,0,0,0.3)', backdropFilter: 'blur(10px)' }}>
+            {(el.items || ['🏠 Home', '🔍 Search', '➕', '❤️ Likes', '👤 Profile']).map((item, i) => {
+              const isActive = i === 0;
+              const [icon, label] = item.includes(' ') ? item.split(' ', 2) : [item, ''];
+              return (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 12px', cursor: 'pointer' }}>
+                  <span style={{ fontSize: icon === '➕' ? '1.8rem' : '1.3rem', opacity: isActive ? 1 : 0.6 }}>{icon}</span>
+                  {label && <span style={{ fontSize: '0.65rem', color: isActive ? COLORS.purple : theme.textMuted, fontWeight: isActive ? 600 : 400 }}>{label}</span>}
+                </div>
+              );
+            })}
+          </div>
+        );
+
+      case 'app-bar':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.overlay, borderRadius: '0 0 16px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', boxShadow: shadows.md, backdropFilter: 'blur(10px)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: '1.3rem', cursor: 'pointer', color: theme.textPrimary }}>←</span>
+              <span style={{ color: theme.textPrimary, fontSize: '1.1rem', fontWeight: 600 }}>{el.title || 'Screen Title'}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              {(el.actions || ['🔔', '👤']).map((action, i) => (
+                <span key={i} style={{ fontSize: '1.2rem', cursor: 'pointer' }}>{action}</span>
+              ))}
+            </div>
+          </div>
+        );
+
+      case 'fab':
+        return (
+          <div key={el.id} style={{ ...base, width: 56, height: 56, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: `0 6px 24px ${COLORS.purple}50`, fontSize: '1.5rem', color: '#fff', fontWeight: 300 }}>
+            {el.icon || '+'}
+          </div>
+        );
+
+      case 'toast':
+        const toastColors = { success: COLORS.green, error: COLORS.red, warning: COLORS.orange, info: COLORS.blue };
+        const toastIcons = { success: '✓', error: '✗', warning: '⚠', info: 'ℹ' };
+        const toastColor = toastColors[el.variant] || COLORS.blue;
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, minHeight: 52, background: surface.overlay, border: `1px solid ${toastColor}40`, borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: `${shadows.lg}, 0 0 0 1px ${toastColor}20`, backdropFilter: 'blur(10px)' }}>
+            <div style={{ width: 28, height: 28, borderRadius: '50%', background: `${toastColor}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: toastColor, fontSize: '0.9rem', fontWeight: 700 }}>{toastIcons[el.variant] || 'ℹ'}</div>
+            <span style={{ flex: 1, color: theme.textPrimary, fontSize: '0.9rem' }}>{el.message || 'Notification message'}</span>
+            <span style={{ color: theme.textMuted, fontSize: '1rem', cursor: 'pointer' }}>×</span>
+          </div>
+        );
+
+      case 'empty-state':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `2px dashed ${border}`, borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center' }}>
+            <div style={{ width: 80, height: 80, borderRadius: 20, background: surface.high, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20, fontSize: '2.5rem' }}>📭</div>
+            <h3 style={{ color: theme.textPrimary, fontSize: '1.2rem', fontWeight: 600, marginBottom: 8 }}>{el.title || 'No items yet'}</h3>
+            <p style={{ color: theme.textMuted, fontSize: '0.9rem', maxWidth: 280, lineHeight: 1.5, marginBottom: 20 }}>{el.description || 'Get started by creating your first item'}</p>
+            {el.cta && <button style={{ padding: '10px 24px', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, border: 'none', borderRadius: 8, color: '#fff', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}>{el.cta}</button>}
+          </div>
+        );
+
+      case 'error-state':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: `${COLORS.red}08`, border: `1px solid ${COLORS.red}30`, borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center' }}>
+            <div style={{ width: 80, height: 80, borderRadius: 20, background: `${COLORS.red}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20, fontSize: '2.5rem' }}>⚠️</div>
+            <h3 style={{ color: COLORS.red, fontSize: '1.2rem', fontWeight: 600, marginBottom: 8 }}>{el.title || 'Something went wrong'}</h3>
+            <p style={{ color: theme.textSecondary, fontSize: '0.9rem', maxWidth: 300, lineHeight: 1.5, marginBottom: 20 }}>{el.description || 'We encountered an error. Please try again.'}</p>
+            {el.cta && <button style={{ padding: '10px 24px', background: COLORS.red, border: 'none', borderRadius: 8, color: '#fff', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}>{el.cta}</button>}
+          </div>
+        );
+
+      case 'loading-state':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+            <div style={{ width: 48, height: 48, border: `3px solid ${COLORS.purple}30`, borderTopColor: COLORS.purple, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+            <span style={{ color: theme.textMuted, fontSize: '0.9rem' }}>{el.text || 'Loading...'}</span>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        );
+
+      case 'testimonial':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 16, padding: '28px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontSize: '2.5rem', color: COLORS.purple, opacity: 0.6, lineHeight: 1 }}>"</div>
+            <p style={{ flex: 1, color: theme.textPrimary, fontSize: '1rem', lineHeight: 1.6, fontStyle: 'italic', marginTop: 8 }}>{el.quote || 'This product has completely transformed how we work.'}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 20, paddingTop: 16, borderTop: `1px solid ${borderLight}` }}>
+              <div style={{ width: 44, height: 44, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.pink})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '1.1rem' }}>{(el.name || 'J').charAt(0)}</div>
+              <div>
+                <div style={{ color: theme.textPrimary, fontWeight: 600, fontSize: '0.95rem' }}>{el.name || 'Jane Doe'}</div>
+                <div style={{ color: theme.textMuted, fontSize: '0.8rem' }}>{el.title || 'CEO, Company'}</div>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'footer':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: isLightTheme ? 'rgba(0,0,0,0.04)' : 'rgba(0,0,0,0.3)', borderRadius: '16px 16px 0 0', padding: '32px 40px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 32 }}>
+              {(el.sections || [['Product', 'Features', 'Pricing'], ['Company', 'About', 'Blog'], ['Support', 'Help', 'Contact']]).map((section, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ color: theme.textPrimary, fontWeight: 600, fontSize: '0.9rem' }}>{section[0]}</div>
+                  {section.slice(1).map((link, j) => (
+                    <span key={j} style={{ color: theme.textMuted, fontSize: '0.85rem', cursor: 'pointer' }}>{link}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div style={{ borderTop: `1px solid ${borderLight}`, paddingTop: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: theme.textMuted, fontSize: '0.8rem' }}>{el.copyright || '© 2024 Company. All rights reserved.'}</span>
+              <div style={{ display: 'flex', gap: 16 }}>
+                {['twitter', 'github', 'linkedin'].map((social, i) => (
+                  <div key={i} style={{ width: 32, height: 32, borderRadius: 8, background: surface.elevated, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '0.9rem', color: theme.textSecondary }}>
+                    {social === 'twitter' ? '𝕏' : social === 'github' ? '⌗' : 'in'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'social-links':
+        const socialIcons = { twitter: '𝕏', github: '⌗', linkedin: 'in', facebook: 'f', instagram: '📷', youtube: '▶' };
+        return (
+          <div key={el.id} style={{ ...base, display: 'flex', gap: 12 }}>
+            {(el.links || ['twitter', 'github', 'linkedin']).map((social, i) => (
+              <div key={i} style={{ width: 40, height: 40, borderRadius: 10, background: surface.elevated, border: `1px solid ${border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1rem', color: theme.textSecondary }}>
+                {socialIcons[social.toLowerCase()] || social.charAt(0).toUpperCase()}
+              </div>
+            ))}
+          </div>
+        );
+
+      case 'cta-section':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: `linear-gradient(135deg, ${COLORS.purple}20, ${COLORS.blue}15)`, border: `1px solid ${COLORS.purple}30`, borderRadius: 20, padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <h2 style={{ color: theme.textPrimary, fontSize: '1.8rem', fontWeight: 800, marginBottom: 12 }}>{el.title || 'Ready to get started?'}</h2>
+            <p style={{ color: theme.textSecondary, fontSize: '1rem', maxWidth: 480, marginBottom: 24 }}>{el.description || 'Join thousands of satisfied customers today.'}</p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button style={{ padding: '14px 28px', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, border: 'none', borderRadius: 10, color: '#fff', fontSize: '1rem', fontWeight: 600, cursor: 'pointer' }}>{el.cta || 'Get Started'}</button>
+              <button style={{ padding: '14px 28px', background: 'transparent', border: `1px solid ${borderStrong}`, borderRadius: 10, color: theme.textPrimary, fontSize: '1rem', fontWeight: 600, cursor: 'pointer' }}>Learn More</button>
+            </div>
+          </div>
+        );
+
+      case 'profile-card':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `1px solid ${border}`, borderRadius: 20, padding: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <div style={{ width: 80, height: 80, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.pink})`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16, fontSize: '2rem', color: '#fff', fontWeight: 700 }}>{(el.name || 'U').charAt(0)}</div>
+            <h3 style={{ color: theme.textPrimary, fontSize: '1.2rem', fontWeight: 700, marginBottom: 4 }}>{el.name || 'User Name'}</h3>
+            <span style={{ color: COLORS.purple, fontSize: '0.85rem', marginBottom: 12 }}>{el.username || '@username'}</span>
+            <p style={{ color: theme.textSecondary, fontSize: '0.9rem', lineHeight: 1.5 }}>{el.bio || 'Software developer and design enthusiast.'}</p>
+            <div style={{ display: 'flex', gap: 24, marginTop: 20, paddingTop: 20, borderTop: `1px solid ${borderLight}`, width: '100%', justifyContent: 'center' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: '1.1rem' }}>1.2K</div>
+                <div style={{ color: theme.textMuted, fontSize: '0.75rem' }}>Followers</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: '1.1rem' }}>348</div>
+                <div style={{ color: theme.textMuted, fontSize: '0.75rem' }}>Following</div>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'activity-item':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 0' }}>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: `linear-gradient(135deg, ${BRANCH_COLORS[Math.floor(Math.random() * 5)]}, ${BRANCH_COLORS[Math.floor(Math.random() * 5) + 1]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 600, flexShrink: 0 }}>U</div>
+            <div style={{ flex: 1 }}>
+              <p style={{ color: theme.textPrimary, fontSize: '0.9rem', lineHeight: 1.5, margin: 0 }}>{el.text || 'User performed an action'}</p>
+              <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>{el.time || '2 hours ago'}</span>
+            </div>
+          </div>
+        );
+
+      case 'comment':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, display: 'flex', alignItems: 'flex-start', gap: 12, padding: '16px', background: surface.low, borderRadius: 12, border: `1px solid ${borderLight}` }}>
+            <div style={{ width: 40, height: 40, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS.purple}, ${COLORS.blue})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.9rem', fontWeight: 600, flexShrink: 0 }}>{(el.username || 'U').charAt(0)}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ color: theme.textPrimary, fontWeight: 600, fontSize: '0.9rem' }}>{el.username || 'Username'}</span>
+                <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>{el.time || '1 hour ago'}</span>
+              </div>
+              <p style={{ color: theme.textSecondary, fontSize: '0.9rem', lineHeight: 1.5, margin: 0 }}>{el.text || 'This is a comment...'}</p>
+              <div style={{ display: 'flex', gap: 16, marginTop: 10 }}>
+                <span style={{ color: theme.textMuted, fontSize: '0.8rem', cursor: 'pointer' }}>❤️ Like</span>
+                <span style={{ color: theme.textMuted, fontSize: '0.8rem', cursor: 'pointer' }}>💬 Reply</span>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'code-block':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.code, border: `1px solid ${border}`, borderRadius: 12, overflow: 'hidden', fontFamily: 'SF Mono, Monaco, Consolas, monospace' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: surface.low, borderBottom: `1px solid ${borderLight}` }}>
+              <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>{el.language || 'javascript'}</span>
+              <span style={{ color: theme.textMuted, fontSize: '0.75rem', cursor: 'pointer' }}>📋 Copy</span>
+            </div>
+            <pre style={{ margin: 0, padding: '16px', color: theme.textSecondary, fontSize: '0.85rem', lineHeight: 1.6, overflow: 'auto' }}>
+              <code>{el.code || `const greeting = "Hello, World!";\nconsole.log(greeting);`}</code>
+            </pre>
+          </div>
+        );
+
+      case 'upload':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, height: el.height, background: surface.low, border: `2px dashed ${borderMedium}`, borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, cursor: 'pointer', transition: 'all 0.2s' }}>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: `${COLORS.purple}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem' }}>📤</div>
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ color: theme.textPrimary, fontSize: '0.95rem', fontWeight: 600, marginBottom: 4 }}>{el.label || 'Drag files here'}</p>
+              <p style={{ color: theme.textMuted, fontSize: '0.8rem' }}>or click to browse</p>
+            </div>
+            <span style={{ color: theme.textMuted, fontSize: '0.75rem' }}>Max 10MB • PNG, JPG, PDF</span>
+          </div>
+        );
+
+      case 'accordion':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, background: surface.low, border: `1px solid ${border}`, borderRadius: 12, overflow: 'hidden' }}>
+            {(el.items || ['Section 1', 'Section 2', 'Section 3']).map((item, i) => (
+              <div key={i} style={{ borderBottom: i < (el.items?.length || 3) - 1 ? `1px solid ${borderLight}` : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', cursor: 'pointer' }}>
+                  <span style={{ color: theme.textPrimary, fontSize: '0.95rem', fontWeight: 500 }}>{item}</span>
+                  <span style={{ color: theme.textMuted, transform: i === 0 ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+                </div>
+                {i === 0 && (
+                  <div style={{ padding: '0 18px 14px', color: theme.textSecondary, fontSize: '0.9rem', lineHeight: 1.5 }}>
+                    Expanded content for this section with more details...
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+
+      case 'data-table':
+        return (
+          <div key={el.id} style={{ ...base, width: el.width, background: surface.low, border: `1px solid ${border}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', background: surface.high, borderBottom: `1px solid ${border}` }}>
+              {['Name', 'Status', 'Date', 'Actions'].map((h, i) => (
+                <div key={i} style={{ flex: i === 0 ? 2 : 1, padding: '12px 16px', color: theme.textSecondary, fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</div>
+              ))}
+            </div>
+            {Array.from({ length: el.rows || 3 }).map((_, i) => (
+              <div key={i} style={{ display: 'flex', borderBottom: i < (el.rows || 3) - 1 ? `1px solid ${borderLight}` : 'none' }}>
+                <div style={{ flex: 2, padding: '14px 16px', color: theme.textPrimary, fontSize: '0.9rem' }}>Item {i + 1}</div>
+                <div style={{ flex: 1, padding: '14px 16px' }}>
+                  <span style={{ padding: '4px 10px', background: i === 0 ? `${COLORS.green}20` : `${COLORS.orange}20`, color: i === 0 ? COLORS.green : COLORS.orange, borderRadius: 6, fontSize: '0.75rem', fontWeight: 500 }}>{i === 0 ? 'Active' : 'Pending'}</span>
+                </div>
+                <div style={{ flex: 1, padding: '14px 16px', color: theme.textMuted, fontSize: '0.85rem' }}>Dec {10 + i}, 2024</div>
+                <div style={{ flex: 1, padding: '14px 16px', display: 'flex', gap: 8 }}>
+                  <span style={{ cursor: 'pointer' }}>✏️</span>
+                  <span style={{ cursor: 'pointer' }}>🗑️</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+
       default:
         return null;
     }
   };
-  
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
       <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
@@ -8655,7 +9497,7 @@ function UseCaseDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabel
 // MAIN COMPONENT
 // ============================================
 
-export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection }) {
+export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes, onEdgeLabelChange, onCreateConnection, onLinkedTemplateClick }) {
   const t = THEMES[theme] || THEMES.dark;
   const parsed = useMemo(() => {
     if (data) return data;
@@ -8699,7 +9541,7 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMod
     case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
-    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'journey': return <UserJourneyDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onLinkedTemplateClick={onLinkedTemplateClick} />;
     case 'timeline': return <TimelineDiagram events={parsed} theme={t} sketchMode={sketchMode} />;
     case 'sequence': return <SequenceDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
     case 'orgchart': return <OrgChartDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
@@ -9249,53 +10091,76 @@ Prometheus --> User Service: metrics` },
   pie: { title: '🥧 Pie', source: `"JavaScript": 40\n"Python": 25\n"TypeScript": 20\n"Go": 15` },
   quadrant: { title: '📊 Quadrant', source: `title: Tech Matrix\nx-axis: Effort →\ny-axis: Impact →\nquadrant-1: Quick Wins\nquadrant-2: Big Projects\nquadrant-3: Fill-ins\nquadrant-4: Thankless\n\nReact: [30, 90]\nRefactor: [80, 70]\nDocs: [20, 40]` },
   git: { title: '🌿 Git', source: `commit "Initial"\ncommit "Feature A"\nbranch develop\ncommit "Dev work"\ncheckout main\ncommit "Hotfix"\nmerge develop` },
-  wireframe: { title: '📱 Wireframe', source: `{My App}
-[[ Home | Products | About | Contact ]]
+  wireframe: { title: '📱 Wireframe', source: `{Dashboard App}
+[[ 🏠 Home | 📊 Analytics | 👤 Profile | ⚙️ Settings | [Upgrade] ]]
 
 >> Home > Dashboard
 
-# Welcome Back
+---
 
-<User Dashboard>
-(@John Doe)
-
-[search: Search products...]
-
-[v Select Category]
-[slider: 65%]
+[hero: Welcome to Your Dashboard | Track your progress, manage tasks, and achieve your goals. | Get Started]
 
 ---
 
-**Quick Stats**
-[progress: 78%]
+## Key Metrics
 
-|Name|Status|Amount|
-|Order #1|Shipped|$120|
-|Order #2|Pending|$85|
+[stat: 2,847 | Active Users | +12%]
 
----
+[stat: $48,294 | Revenue | +8.5%]
 
-(( Overview | Analytics | Settings ))
-
-[img: Product Preview]
-
-- Feature one included
-- Feature two enabled  
-- Feature three available
-
-[o] Dark mode
-[O] Notifications
-
-[step: 2/4]
+[stat: 156 | New Orders | +23%]
 
 ---
 
-[Login] [Cancel] [Delete]
+## Quick Actions
 
-[page: 3/10]
+[widget: Tasks | 12 | 📋]
 
-{badge:New} {success:Active} {warning:Review}
-</>`},
+[widget: Messages | 5 | 💬]
+
+[widget: Reports | 3 | 📈]
+
+---
+
+## Features
+
+[feature: 🚀 | Fast Performance | Lightning-fast load times with optimized delivery.]
+
+[feature: 🔒 | Secure by Default | Enterprise-grade security with encryption.]
+
+[feature: 📊 | Real-time Analytics | Live insights into your business metrics.]
+
+---
+
+## Recent Activity
+
+[activity: John completed project review | 5 min ago]
+
+[activity: Sarah uploaded new design files | 1 hour ago]
+
+[activity: Team meeting scheduled | 2 hours ago]
+
+---
+
+## Data Overview
+
+[data-table: 4 rows]
+
+---
+
+## Quick Upload
+
+[upload: Drop files here or click to browse]
+
+---
+
+[toast: Changes saved successfully | success]
+
+[fab: +]
+
+---
+
+[footer: Product | Pricing | Support :: Company | About | Careers :: © 2024 App Inc.]`},
   class: { title: '📐 Class', source: `class User\n+id: string\n+name: string\n-password: string\n+login(): boolean\n+getPosts(): Post[]\n\nclass Post\n+id: string\n+title: string\n+content: string\n+userId: string\n+publish(): void\n\nUser --> Post : has many\nUser --* Post : owns` },
   activity: { title: '🔄 Activity', source: `[start]\n:Open App;\n:Login;\n<Valid?>\n:Dashboard;\n:Error;\n[end]\n\nstart -> Open App\nOpen App -> Login\nLogin -> Valid?\nValid? -> Dashboard: Yes\nValid? -> Error: No\nDashboard -> end\nError -> Login` },
   usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)\n(View Reports)\n\nCustomer -> Browse Products\nCustomer -> Checkout\nAdmin -> Manage Inventory\nAdmin -> View Reports` },
@@ -9489,6 +10354,21 @@ export default function Demo() {
     setSource(newSource);
     pushState({ type: active, source: newSource, diagramName }, 'create-connection');
   }, [src, active, diagramName, pushState]);
+
+  // Handle clicking on linked template in User Journey diagrams
+  const handleLinkedTemplateClick = useCallback((templateId, nodeLabel) => {
+    const template = getTemplateById(templateId);
+    if (template) {
+      // Load the linked template
+      setActive(template.type);
+      setSource(template.source);
+      setDiagramName(template.name);
+      setShowEditor(true);
+      pushState({ type: template.type, source: template.source, diagramName: template.name }, 'linked-template');
+    } else {
+      console.warn(`Template not found: ${templateId}`);
+    }
+  }, [pushState]);
 
   // Sync history state back to component state when undo/redo
   useEffect(() => {
@@ -10008,7 +10888,7 @@ export default function Demo() {
             }
           }}
         >
-          <UniversalDiagram key={`${active}-${src}-${themeName}-${sketchMode}`} type={active} source={src} theme={themeName} sketchMode={sketchMode} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} />
+          <UniversalDiagram key={`${active}-${src}-${themeName}-${sketchMode}`} type={active} source={src} theme={themeName} sketchMode={sketchMode} onLabelChange={handleNodeLabelChange} onDeleteNodes={handleDeleteNodes} onPasteNodes={handlePasteNodes} onEdgeLabelChange={handleEdgeLabelChange} onCreateConnection={handleCreateConnection} onLinkedTemplateClick={handleLinkedTemplateClick} />
         </div>
       </div>
 
