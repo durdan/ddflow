@@ -43,3 +43,13 @@ pnpm-debug.log*
 
 # Playground build
 playground/dist/
+
+# Claude memory
+CLAUDE_MEMORY.md
+
+# TypeScript declarations (generated)
+dist/*.d.ts
+dist/*.d.ts.map
+
+# Experimental TS entry point
+src/index.ts
