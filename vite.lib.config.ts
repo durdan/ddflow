@@ -1,29 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import dts from 'vite-plugin-dts';
 import { resolve } from 'path';
 
 export default defineConfig({
-  plugins: [
-    react(),
-    dts({
-      insertTypesEntry: true,
-      include: ['src'],
-      outDir: 'dist',
-    }),
-  ],
+  plugins: [react()],
   build: {
     lib: {
-      entry: {
-        index: resolve(__dirname, 'src/index.ts'),
-        parsers: resolve(__dirname, 'src/parsers/index.ts'),
-      },
-      name: 'DiagramEngine',
+      entry: resolve(__dirname, 'src/DiagramEngine.jsx'),
+      name: 'DDflow',
       formats: ['es', 'cjs'],
-      fileName: (format, entryName) => {
-        const ext = format === 'es' ? 'esm.js' : 'cjs.js';
-        return `${entryName}.${ext}`;
-      },
+      fileName: (format) => `index.${format === 'es' ? 'esm' : 'cjs'}.js`,
     },
     rollupOptions: {
       external: ['react', 'react-dom', 'react/jsx-runtime'],
@@ -33,17 +19,9 @@ export default defineConfig({
           'react-dom': 'ReactDOM',
           'react/jsx-runtime': 'jsxRuntime',
         },
-        preserveModules: false,
       },
     },
     sourcemap: true,
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true,
-      },
-    },
   },
   resolve: {
     alias: {

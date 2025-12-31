@@ -21980,3 +21980,4 @@ export {
   nw as WireframeDiagram,
   yw as default
 };
+//# sourceMappingURL=index.esm.js.map
