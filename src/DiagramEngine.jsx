@@ -1949,8 +1949,8 @@ const Parsers = {
       let line = lines[lineIdx].trim();
       if (!line || line.startsWith('#')) continue;
 
-      // Parse group start: group "name" { (with optional leading whitespace for nesting)
-      const groupStartMatch = line.match(/^group\s+["']([^"']+)["']\s*\{?\s*$/i);
+      // Parse group/boundary start: group "name" { or boundary "name" { (with optional leading whitespace for nesting)
+      const groupStartMatch = line.match(/^(?:group|boundary)\s+["']([^"']+)["']\s*\{?\s*$/i);
       if (groupStartMatch) {
         const groupName = groupStartMatch[1];
         const parentGroup = groupStack.length > 0 ? groupStack[groupStack.length - 1] : null;
@@ -3830,16 +3830,57 @@ const Parsers = {
   },
 
   c4: (text) => {
-    const elements = [], relationships = [];
+    const elements = [], relationships = [], boundaries = [];
+    const boundaryStack = []; // Track nested boundaries
+    let boundaryIndex = 0;
+
     text.split('\n').forEach((line, i) => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
+
+      // Parse boundary/group start: boundary "name" { or group "name" {
+      const boundaryMatch = line.match(/^(?:boundary|group)\s+["']([^"']+)["']\s*\{?\s*$/i);
+      if (boundaryMatch) {
+        const boundary = {
+          id: `boundary-${boundaryIndex++}`,
+          name: boundaryMatch[1].trim(),
+          elements: [],
+          parent: boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].id : null
+        };
+        boundaries.push(boundary);
+        boundaryStack.push(boundary);
+        return;
+      }
+
+      // Parse boundary end: }
+      if (line === '}' && boundaryStack.length > 0) {
+        boundaryStack.pop();
+        return;
+      }
+
+      // Parse element: [type] Name: Description
       const elemMatch = line.match(/^\[(\w+)\]\s*(.+?)(?::\s*(.+))?$/);
-      if (elemMatch) { elements.push({ id: `c4-${i}`, type: elemMatch[1].toLowerCase(), label: elemMatch[2].trim(), description: elemMatch[3]?.trim() || '' }); return; }
+      if (elemMatch) {
+        const elem = {
+          id: `c4-${i}`,
+          type: elemMatch[1].toLowerCase(),
+          label: elemMatch[2].trim(),
+          description: elemMatch[3]?.trim() || '',
+          boundary: boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].id : null
+        };
+        elements.push(elem);
+        // Add to current boundary if in one
+        if (boundaryStack.length > 0) {
+          boundaryStack[boundaryStack.length - 1].elements.push(elem.id);
+        }
+        return;
+      }
+
+      // Parse relationship: Source -> Target: Label
       const relMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
       if (relMatch) relationships.push({ from: relMatch[1].trim(), to: relMatch[2].trim(), label: relMatch[3]?.trim() || '' });
     });
-    return { elements, relationships };
+    return { elements, relationships, boundaries };
   },
 
   requirement: (text) => {
@@ -8445,7 +8486,7 @@ function ComponentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLab
 // C4 Diagram with relationships
 function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
-  const { elements = [], relationships = [] } = data;
+  const { elements = [], relationships = [], boundaries = [] } = data;
 
   const typeStyles = {
     person: { color: COLORS.blue, icon: '👤', shape: 'person' },
@@ -8457,16 +8498,90 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
     default: { color: COLORS.cyan, icon: '🏗️', shape: 'rect' }
   };
 
+  const boundaryColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.amber, COLORS.pink];
+
   const layout = useMemo(() => {
-    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(elements.length))));
-    return elements.map((el, i) => ({
-      ...el,
-      id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
-      defaultX: 150 + (i % cols) * 240,
-      defaultY: 120 + Math.floor(i / cols) * 180,
-      style: typeStyles[el.type] || typeStyles.default
-    }));
-  }, [elements]);
+    // Group elements by boundary
+    const boundaryElements = new Map();
+    const unboundedElements = [];
+
+    elements.forEach((el, i) => {
+      if (el.boundary) {
+        if (!boundaryElements.has(el.boundary)) boundaryElements.set(el.boundary, []);
+        boundaryElements.get(el.boundary).push({ ...el, origIndex: i });
+      } else {
+        unboundedElements.push({ ...el, origIndex: i });
+      }
+    });
+
+    const positioned = [];
+    let currentY = 120;
+    const padding = 40;
+    const nodeWidth = 170;
+    const nodeHeight = 120;
+    const nodeSpacingX = 220;
+    const nodeSpacingY = 160;
+
+    // Position unbounded elements first at top
+    if (unboundedElements.length > 0) {
+      const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(unboundedElements.length))));
+      unboundedElements.forEach((el, i) => {
+        positioned.push({
+          ...el,
+          id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+          defaultX: 150 + (i % cols) * nodeSpacingX,
+          defaultY: currentY + Math.floor(i / cols) * nodeSpacingY,
+          style: typeStyles[el.type] || typeStyles.default
+        });
+      });
+      const rows = Math.ceil(unboundedElements.length / Math.min(4, Math.max(2, Math.ceil(Math.sqrt(unboundedElements.length)))));
+      currentY += rows * nodeSpacingY + padding;
+    }
+
+    // Position elements within each boundary
+    boundaries.forEach((boundary, bi) => {
+      const boundaryEls = boundaryElements.get(boundary.id) || [];
+      if (boundaryEls.length === 0) return;
+
+      const cols = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(boundaryEls.length))));
+      boundaryEls.forEach((el, i) => {
+        positioned.push({
+          ...el,
+          id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+          defaultX: 150 + padding + (i % cols) * nodeSpacingX,
+          defaultY: currentY + padding + 30 + Math.floor(i / cols) * nodeSpacingY,
+          style: typeStyles[el.type] || typeStyles.default,
+          boundaryId: boundary.id
+        });
+      });
+      const rows = Math.ceil(boundaryEls.length / cols);
+      currentY += rows * nodeSpacingY + padding * 2 + 40;
+    });
+
+    return positioned;
+  }, [elements, boundaries]);
+
+  // Calculate boundary rectangles
+  const boundaryRects = useMemo(() => {
+    return boundaries.map((boundary, i) => {
+      const boundaryNodes = layout.filter(el => el.boundaryId === boundary.id);
+      if (boundaryNodes.length === 0) return null;
+
+      const xs = boundaryNodes.map(n => n.defaultX);
+      const ys = boundaryNodes.map(n => n.defaultY);
+      const padding = 30;
+
+      return {
+        id: boundary.id,
+        name: boundary.name,
+        x: Math.min(...xs) - 85 - padding,
+        y: Math.min(...ys) - 60 - padding - 25,
+        width: Math.max(...xs) - Math.min(...xs) + 170 + padding * 2,
+        height: Math.max(...ys) - Math.min(...ys) + 120 + padding * 2 + 25,
+        color: boundaryColors[i % boundaryColors.length]
+      };
+    }).filter(Boolean);
+  }, [boundaries, layout]);
 
   const getPos = (el) => canvas.getNodePosition(el.id, el.defaultX, el.defaultY);
 
@@ -8568,6 +8683,13 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
+          {/* Render boundary rectangles first (behind nodes) */}
+          {boundaryRects.map(boundary => (
+            <div key={boundary.id} style={{ position: 'absolute', left: boundary.x, top: boundary.y, width: boundary.width, height: boundary.height, background: `${boundary.color}08`, border: `2px dashed ${boundary.color}50`, borderRadius: 16, pointerEvents: 'none' }}>
+              <div style={{ position: 'absolute', top: 8, left: 12, fontSize: '0.75rem', fontWeight: 600, color: boundary.color, textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.8 }}>{boundary.name}</div>
+            </div>
+          ))}
+          {/* Render nodes */}
           {layout.map(el => {
             const pos = getPos(el);
             const isDragging = canvas.dragging === el.id;
