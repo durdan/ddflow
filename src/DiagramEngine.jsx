@@ -405,21 +405,41 @@ const RoughLine = ({ x1, y1, x2, y2, stroke, strokeWidth = 1.5, roughness = 1.5,
 };
 
 // Generate smooth cubic bezier path for connections
+// Improved algorithm with better curvature and smoother transitions
 const getCurvedPath = (sx, sy, tx, ty) => {
   const dx = tx - sx;
   const dy = ty - sy;
   const dist = Math.sqrt(dx * dx + dy * dy);
-  const curvature = Math.min(dist * 0.25, 60);
 
-  // Horizontal-ish connections: curve horizontally
-  if (Math.abs(dx) > Math.abs(dy)) {
-    const dir = dx > 0 ? 1 : -1;
-    return `M ${sx} ${sy} C ${sx + curvature * dir} ${sy}, ${tx - curvature * dir} ${ty}, ${tx} ${ty}`;
+  // Adaptive curvature: stronger for short distances, capped for long ones
+  const curvature = Math.min(Math.max(dist * 0.3, 20), 80);
+
+  // For very short distances, use straight line
+  if (dist < 30) {
+    return `M ${sx} ${sy} L ${tx} ${ty}`;
   }
 
-  // Vertical-ish connections: curve vertically
-  const dir = dy > 0 ? 1 : -1;
-  return `M ${sx} ${sy} C ${sx} ${sy + curvature * dir}, ${tx} ${ty - curvature * dir}, ${tx} ${ty}`;
+  // Horizontal-ish connections: smooth S-curve horizontally
+  if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+    const dir = dx > 0 ? 1 : -1;
+    // Offset control points slightly in Y for smoother entry/exit
+    const yOffset = dy * 0.1;
+    return `M ${sx} ${sy} C ${sx + curvature * dir} ${sy + yOffset}, ${tx - curvature * dir} ${ty - yOffset}, ${tx} ${ty}`;
+  }
+
+  // Vertical-ish connections: smooth S-curve vertically
+  if (Math.abs(dy) > Math.abs(dx) * 1.2) {
+    const dir = dy > 0 ? 1 : -1;
+    // Offset control points slightly in X for smoother entry/exit
+    const xOffset = dx * 0.1;
+    return `M ${sx} ${sy} C ${sx + xOffset} ${sy + curvature * dir}, ${tx - xOffset} ${ty - curvature * dir}, ${tx} ${ty}`;
+  }
+
+  // Diagonal connections: balanced curve
+  const xDir = dx > 0 ? 1 : -1;
+  const yDir = dy > 0 ? 1 : -1;
+  const diagCurve = curvature * 0.7;
+  return `M ${sx} ${sy} C ${sx + diagCurve * xDir} ${sy + diagCurve * yDir * 0.3}, ${tx - diagCurve * xDir} ${ty - diagCurve * yDir * 0.3}, ${tx} ${ty}`;
 };
 
 // Generate wobbly/sketchy path for hand-drawn effect
@@ -1447,10 +1467,10 @@ function ColorPickerMenu({ x, y, nodeId, currentIcon, currentShape, onSelectColo
 // ============================================
 
 const EDGE_STYLE_OPTIONS = [
-  { name: 'Animated', style: 'animated', icon: '〰️', dasharray: '8,4', animated: true },
-  { name: 'Dashed', style: 'dashed', icon: '┅', dasharray: '8,4', animated: false },
-  { name: 'Dotted', style: 'dotted', icon: '···', dasharray: '3,3', animated: false },
   { name: 'Solid', style: 'solid', icon: '━', dasharray: null, animated: false },
+  { name: 'Animated', style: 'animated', icon: '〰️', dasharray: null, animated: true },
+  { name: 'Dashed', style: 'dashed', icon: '┅', dasharray: '10,6', animated: false },
+  { name: 'Dotted', style: 'dotted', icon: '···', dasharray: '2,4', animated: false },
 ];
 
 // Arrow type options for edges
@@ -2133,10 +2153,10 @@ const Parsers = {
     const g = new dagre.graphlib.Graph();
     g.setGraph({
       rankdir: 'TB',        // Top to bottom
-      nodesep: isComplex ? 180 : 120,   // More horizontal spacing
-      ranksep: isComplex ? 180 : 130,   // More vertical spacing between layers
-      marginx: 120,
-      marginy: 100,
+      nodesep: isComplex ? 80 : 60,    // Tighter horizontal spacing
+      ranksep: isComplex ? 80 : 60,    // Tighter vertical spacing between layers
+      marginx: 60,
+      marginy: 50,
       ranker: 'network-simplex' // Best for complex multi-path graphs
     });
     g.setDefaultEdgeLabel(() => ({}));
@@ -2160,7 +2180,7 @@ const Parsers = {
     nodes.forEach((node) => {
       g.setNode(node.id, {
         label: node.label,
-        width: Math.max(node.width, 180), // Wider minimum width
+        width: node.width || NODE_WIDTH,  // Use actual node width
         height: NODE_HEIGHT,
         // Use layer index for rank constraint
         rank: node.layerIndex
@@ -4354,6 +4374,13 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
   const canvas = useInteractiveCanvas({ x: 0, y: 30 });
   const { nodes = [], edges = [], groups = [] } = data;
   const getPos = (node) => canvas.getNodePosition(node.id, node.x, node.y);
+
+  // State for group positions (updated by auto-layout)
+  const [layoutGroupPositions, setLayoutGroupPositions] = useState({});
+
+  // Default node dimensions for layout calculations
+  const DEFAULT_NODE_WIDTH = 150, DEFAULT_NODE_HEIGHT = 90;
+
   const getShape = (node) => {
     // Use shape from node style if defined, otherwise determine by type
     if (node.shape === 'cylinder' || ['database', 'cache', 'storage', 'db', 'redis', 's3', 'blob'].includes(node.type)) return 'cylinder';
@@ -4364,7 +4391,6 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
   // Calculate content bounds for fit-to-view
   const contentBounds = useMemo(() => {
     if (!nodes || nodes.length === 0) return { x: 0, y: 0, width: 800, height: 600 };
-    const nodeWidth = 150, nodeHeight = 90;
     const positions = nodes.map(n => {
       // Get position from canvas state or use default
       const pos = canvas.nodePositions?.[n.id];
@@ -4373,27 +4399,54 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
     if (positions.length === 0) return { x: 0, y: 0, width: 800, height: 600 };
     const xs = positions.map(p => p.x);
     const ys = positions.map(p => p.y);
-    const minX = Math.min(...xs) - nodeWidth;
-    const maxX = Math.max(...xs) + nodeWidth;
-    const minY = Math.min(...ys) - nodeHeight;
-    const maxY = Math.max(...ys) + nodeHeight;
+    const minX = Math.min(...xs) - DEFAULT_NODE_WIDTH;
+    const maxX = Math.max(...xs) + DEFAULT_NODE_WIDTH;
+    const minY = Math.min(...ys) - DEFAULT_NODE_HEIGHT;
+    const maxY = Math.max(...ys) + DEFAULT_NODE_HEIGHT;
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }, [nodes, canvas.nodePositions]);
 
-  // Get edge style properties
+  // Get edge style properties - solid by default for clean professional look
   const getEdgeStyleProps = (edge) => {
-    const style = edge.style || 'normal';
+    const style = edge.style || 'solid';
     switch (style) {
       case 'dotted':
-        return { strokeDasharray: '4,4', strokeWidth: 2 };
+        return { strokeDasharray: '2,4', strokeWidth: 2, animated: false };
       case 'dashed':
-        return { strokeDasharray: '8,4', strokeWidth: 2 };
+        return { strokeDasharray: '10,6', strokeWidth: 2, animated: false };
       case 'thick':
-        return { strokeDasharray: 'none', strokeWidth: 4 };
+        return { strokeDasharray: null, strokeWidth: 3.5, animated: false };
       case 'async':
-        return { strokeDasharray: '2,2', strokeWidth: 2 };
-      default:
-        return { strokeDasharray: '6,4', strokeWidth: 2 };
+        return { strokeDasharray: '4,4', strokeWidth: 2, animated: true };
+      case 'animated':
+        return { strokeDasharray: null, strokeWidth: 2.5, animated: true };
+      default: // solid
+        return { strokeDasharray: null, strokeWidth: 2.5, animated: false };
+    }
+  };
+
+  // Calculate edge endpoint at node boundary
+  const getEdgeEndpoint = (nodePos, targetPos, nodeWidth, nodeHeight) => {
+    const dx = targetPos.x - nodePos.x;
+    const dy = targetPos.y - nodePos.y;
+    const halfW = nodeWidth / 2;
+    const halfH = nodeHeight / 2;
+
+    // Calculate intersection with node boundary
+    if (dx === 0 && dy === 0) return { x: nodePos.x, y: nodePos.y };
+
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+
+    // Determine which edge to intersect
+    if (absDx * halfH > absDy * halfW) {
+      // Intersects left or right edge
+      const sign = dx > 0 ? 1 : -1;
+      return { x: nodePos.x + sign * halfW, y: nodePos.y + (dy / absDx) * halfW };
+    } else {
+      // Intersects top or bottom edge
+      const sign = dy > 0 ? 1 : -1;
+      return { x: nodePos.x + (dx / absDy) * halfH, y: nodePos.y + sign * halfH };
     }
   };
 
@@ -4407,6 +4460,96 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
       }
     }
   }, [canvas, nodes, onLabelChange]);
+
+  // Auto-layout: Re-apply dagre layout to arrange nodes
+  const applyAutoLayout = useCallback(() => {
+    if (!nodes || nodes.length === 0) return;
+
+    // Create dagre compound graph to handle groups
+    const g = new dagre.graphlib.Graph({ compound: true });
+    g.setGraph({
+      rankdir: 'TB',
+      nodesep: 60,
+      ranksep: 60,
+      marginx: 60,
+      marginy: 50,
+      ranker: 'network-simplex'
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    // Add group nodes first (as parent containers)
+    groups.forEach((group) => {
+      g.setNode(group.id, {
+        label: group.name,
+        clusterLabelPos: 'top',
+        style: 'fill: transparent'
+      });
+    });
+
+    // Add nodes to dagre with parent group
+    nodes.forEach((node) => {
+      g.setNode(node.id, {
+        label: node.label,
+        width: node.width || DEFAULT_NODE_WIDTH,
+        height: DEFAULT_NODE_HEIGHT
+      });
+      // If node belongs to a group, set parent relationship
+      if (node.group) {
+        const groupId = `group-${node.group.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        if (groups.find(gr => gr.id === groupId)) {
+          g.setParent(node.id, groupId);
+        }
+      }
+    });
+
+    // Add edges to dagre
+    edges.forEach((edge) => {
+      if (nodes.find(n => n.id === edge.source) && nodes.find(n => n.id === edge.target)) {
+        g.setEdge(edge.source, edge.target);
+      }
+    });
+
+    // Run dagre layout
+    dagre.layout(g);
+
+    // Apply computed positions to nodes
+    const newPositions = {};
+    g.nodes().forEach((nodeId) => {
+      const dagreNode = g.node(nodeId);
+      // Only set positions for actual nodes, not groups
+      if (dagreNode && nodes.find(n => n.id === nodeId)) {
+        newPositions[nodeId] = { x: dagreNode.x, y: dagreNode.y };
+      }
+    });
+
+    // Update group positions based on their member nodes
+    const groupPositions = {};
+    groups.forEach((group) => {
+      const memberNodes = nodes.filter(n => {
+        const groupId = n.group ? `group-${n.group.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : null;
+        return groupId === group.id;
+      });
+
+      if (memberNodes.length > 0) {
+        const positions = memberNodes.map(n => newPositions[n.id] || { x: n.x, y: n.y });
+        const padding = 40;
+        const minX = Math.min(...positions.map(p => p.x)) - DEFAULT_NODE_WIDTH / 2 - padding;
+        const maxX = Math.max(...positions.map(p => p.x)) + DEFAULT_NODE_WIDTH / 2 + padding;
+        const minY = Math.min(...positions.map(p => p.y)) - DEFAULT_NODE_HEIGHT / 2 - padding - 20;
+        const maxY = Math.max(...positions.map(p => p.y)) + DEFAULT_NODE_HEIGHT / 2 + padding;
+
+        groupPositions[group.id] = {
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY
+        };
+      }
+    });
+
+    canvas.setPositions(newPositions);
+    setLayoutGroupPositions(groupPositions);
+  }, [nodes, edges, groups, canvas]);
 
   // Handle keyboard shortcuts (Delete, Copy, Paste)
   useEffect(() => {
@@ -4454,49 +4597,63 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.canvasBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
+      <style>{`@keyframes archFlowDash { to { stroke-dashoffset: -20; } }`}</style>
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs>
-            <marker id="arch-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
-            <marker id="arch-arr-thick" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto"><polygon points="0 0, 12 5, 0 10" fill={COLORS.purple} /></marker>
+            {/* Sharp, clean arrow markers - scaled with stroke */}
+            <marker id="arch-arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.purple} />
+            </marker>
+            <marker id="arch-arr-thick" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill={COLORS.purple} />
+            </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {/* Render groups/boundaries first (background) */}
-            {groups.map(group => (
-              <g key={group.id}>
-                <rect
-                  x={group.x}
-                  y={group.y}
-                  width={group.width}
-                  height={group.height}
-                  fill={`${group.color}08`}
-                  stroke={group.color}
-                  strokeWidth={2}
-                  strokeDasharray="8,4"
-                  rx={12}
-                  opacity={0.8}
-                />
-                <text
-                  x={group.x + 16}
-                  y={group.y + 24}
-                  fill={group.color}
-                  fontSize="14"
-                  fontWeight="600"
-                  fontFamily="system-ui"
-                >
-                  {group.name}
-                </text>
-              </g>
-            ))}
+            {groups.map(group => {
+              // Use layout-computed positions if available, otherwise use original
+              const pos = layoutGroupPositions[group.id] || group;
+              return (
+                <g key={group.id}>
+                  <rect
+                    x={pos.x}
+                    y={pos.y}
+                    width={pos.width}
+                    height={pos.height}
+                    fill={`${group.color}08`}
+                    stroke={group.color}
+                    strokeWidth={2}
+                    strokeDasharray="8,4"
+                    rx={12}
+                    opacity={0.8}
+                  />
+                  <text
+                    x={pos.x + 16}
+                    y={pos.y + 24}
+                    fill={group.color}
+                    fontSize="14"
+                    fontWeight="600"
+                    fontFamily="system-ui"
+                  >
+                    {group.name}
+                  </text>
+                </g>
+              );
+            })}
             {/* Render edges */}
             {edges.map(e => {
               const src = nodes.find(n => n.id === e.source), tgt = nodes.find(n => n.id === e.target);
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
-              const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
-              const x1 = sp.x + (dx / dist) * 55, y1 = sp.y + (dy / dist) * 45;
-              const x2 = tp.x - (dx / dist) * 55, y2 = tp.y - (dy / dist) * 45;
+              // Calculate endpoints at node boundaries for clean connection
+              const srcWidth = src.width || DEFAULT_NODE_WIDTH, srcHeight = src.height || DEFAULT_NODE_HEIGHT;
+              const tgtWidth = tgt.width || DEFAULT_NODE_WIDTH, tgtHeight = tgt.height || DEFAULT_NODE_HEIGHT;
+              const startPt = getEdgeEndpoint(sp, tp, srcWidth, srcHeight);
+              const endPt = getEdgeEndpoint(tp, sp, tgtWidth, tgtHeight);
+              const x1 = startPt.x, y1 = startPt.y;
+              const x2 = endPt.x, y2 = endPt.y;
               const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
               // Use curved path (or sketchy path in sketch mode)
               const path = sketchMode ? getSketchyPath(x1, y1, x2, y2, true) : getCurvedPath(x1, y1, x2, y2);
@@ -4509,7 +4666,11 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
                   {/* Inner glow layer - hidden in sketch mode */}
                   {!sketchMode && <path d={path} fill="none" stroke={strokeColor} strokeWidth={edgeProps.strokeWidth * 2} strokeOpacity={0.2} strokeLinecap="round" />}
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={strokeColor} strokeWidth={sketchMode ? 2.5 : edgeProps.strokeWidth} strokeDasharray={edgeProps.strokeDasharray} markerEnd={sketchMode ? '' : (e.style === 'thick' ? 'url(#arch-arr-thick)' : 'url(#arch-arr)')} opacity={sketchMode ? 1 : 0.8} strokeLinecap="round" />
+                  <path d={path} fill="none" stroke={strokeColor} strokeWidth={sketchMode ? 2.5 : edgeProps.strokeWidth} strokeDasharray={edgeProps.strokeDasharray} markerEnd={sketchMode ? '' : (e.style === 'thick' ? 'url(#arch-arr-thick)' : 'url(#arch-arr)')} opacity={sketchMode ? 1 : 0.95} strokeLinecap="round" />
+                  {/* Animated flow overlay - visible when animated */}
+                  {!sketchMode && edgeProps.animated && (
+                    <path d={path} fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth={edgeProps.strokeWidth} strokeDasharray="4,12" strokeLinecap="round" style={{ animation: 'archFlowDash 0.8s linear infinite' }} />
+                  )}
                   {e.label && (
                     <>
                       <rect x={midX - Math.max(e.label.length * 4, 40)} y={midY - 10} width={Math.max(e.label.length * 8, 80)} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
@@ -4571,7 +4732,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
           })}
         </div>
       </div>
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} snapToGrid={canvas.snapToGrid} onToggleSnap={() => canvas.setSnapToGrid(v => !v)} onAutoLayout={applyAutoLayout} />
       {/* Selection info */}
       {canvas.selectedNodes.size > 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(124,58,237,0.9)', borderRadius: 6, padding: '4px 10px', color: '#fff', fontSize: '0.75rem', zIndex: 100 }}>
@@ -4689,8 +4850,8 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onL
 
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs>
-            <marker id="journey-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-              <path d="M 0 0 L 6 3 L 0 6 Z" fill={COLORS.purple} opacity="0.9" />
+            <marker id="journey-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.purple} />
             </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -5557,7 +5718,7 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, sketchMode 
 
   // Helper to get edge style properties
   const getEdgeStyleProps = useCallback((edgeId) => {
-    const style = canvas.edgeStyles[edgeId] || 'animated';
+    const style = canvas.edgeStyles[edgeId] || 'solid';
     const arrowType = canvas.edgeArrowTypes[edgeId] || 'triangle';
     const opt = EDGE_STYLE_OPTIONS.find(o => o.style === style) || EDGE_STYLE_OPTIONS[0];
 
@@ -5600,16 +5761,26 @@ function FlowDiagram({ nodes: initNodes, edges, theme = THEMES.dark, sketchMode 
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible' }}>
           <defs>
-            {/* Triangle arrow (filled) */}
-            <marker id="flow-arr-triangle" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
-            {/* Open arrow (outline only) */}
-            <marker id="flow-arr-open" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polyline points="0 0, 10 4, 0 8" fill="none" stroke={COLORS.purple} strokeWidth="2" /></marker>
-            {/* Diamond arrow */}
-            <marker id="flow-arr-diamond" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill={COLORS.purple} /></marker>
-            {/* Circle arrow */}
-            <marker id="flow-arr-circle" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><circle cx="5" cy="5" r="4" fill={COLORS.purple} /></marker>
+            {/* Triangle arrow (filled) - sharp, clean arrowhead */}
+            <marker id="flow-arr-triangle" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.purple} />
+            </marker>
+            {/* Open arrow (outline only) - crisp chevron */}
+            <marker id="flow-arr-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 7 3 L 0 6" fill="none" stroke={COLORS.purple} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </marker>
+            {/* Diamond arrow - refined diamond shape */}
+            <marker id="flow-arr-diamond" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <path d="M 0 4 L 5 0 L 10 4 L 5 8 Z" fill={COLORS.purple} />
+            </marker>
+            {/* Circle arrow - clean filled circle */}
+            <marker id="flow-arr-circle" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <circle cx="4" cy="4" r="3" fill={COLORS.purple} />
+            </marker>
             {/* Default/backward compatibility */}
-            <marker id="flow-arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker>
+            <marker id="flow-arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.purple} />
+            </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {edges.map(e => {
@@ -6132,7 +6303,12 @@ function ERDDiagram({ tables, theme = THEMES.dark, sketchMode = false, onLabelCh
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="erd-crow" markerWidth="16" markerHeight="12" refX="14" refY="6" orient="auto"><path d="M 0 6 L 10 0 M 0 6 L 10 6 M 0 6 L 10 12" stroke={COLORS.blue} strokeWidth="2" fill="none" /></marker></defs>
+          <defs>
+            {/* ERD crow's foot marker - sharper and cleaner */}
+            <marker id="erd-crow" markerWidth="12" markerHeight="10" refX="10" refY="5" orient="auto">
+              <path d="M 0 5 L 8 0 M 0 5 L 8 5 M 0 5 L 8 10" stroke={COLORS.blue} strokeWidth="2" strokeLinecap="round" fill="none" />
+            </marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {layout.flatMap(t => t.fields?.filter(f => f.fk && f.references).map((f, fi) => {
               const tgt = layout.find(tt => tt.name === f.references);
@@ -6147,7 +6323,7 @@ function ERDDiagram({ tables, theme = THEMES.dark, sketchMode = false, onLabelCh
                   {/* Inner glow layer */}
                   <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={4} strokeOpacity={0.25} strokeLinecap="round" />
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2} markerEnd="url(#erd-crow)" opacity={0.8} strokeLinecap="round" />
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2.5} markerEnd="url(#erd-crow)" opacity={0.95} strokeLinecap="round" />
                 </g>
               );
             }) || [])}
@@ -6330,7 +6506,7 @@ function NetworkDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabel
                   {/* Inner glow */}
                   <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2} strokeDasharray="6,4" opacity={0.8} strokeLinecap="round" />
+                  <path d={path} fill="none" stroke={COLORS.blue} strokeWidth={2.5} opacity={0.95} strokeLinecap="round" />
                   {conn.protocol && (
                     <>
                       <rect x={midX - 28} y={midY - 10} width={56} height={18} rx={4} fill="rgba(0,0,0,0.8)" />
@@ -6502,9 +6678,16 @@ function ClassDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelCh
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs>
-            <marker id="class-inherit" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><polygon points="0 0, 12 6, 0 12" fill="none" stroke={COLORS.purple} strokeWidth="2" /></marker>
-            <marker id="class-assoc" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.blue} /></marker>
-            <marker id="class-diamond" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><polygon points="0 6, 6 0, 12 6, 6 12" fill={COLORS.orange} /></marker>
+            {/* Class diagram markers - sharp and professional */}
+            <marker id="class-inherit" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <path d="M 0 0 L 10 4 L 0 8 Z" fill="none" stroke={COLORS.purple} strokeWidth="1.5" strokeLinejoin="round" />
+            </marker>
+            <marker id="class-assoc" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.blue} />
+            </marker>
+            <marker id="class-diamond" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <path d="M 0 4 L 5 0 L 10 4 L 5 8 Z" fill={COLORS.orange} />
+            </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {relationships.map((rel, i) => {
@@ -6529,7 +6712,7 @@ function ClassDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelCh
                   {/* Inner glow */}
                   <path d={path} fill="none" stroke={color} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
                   {/* Main stroke */}
-                  <path d={path} fill="none" stroke={color} strokeWidth={2} strokeDasharray="8,4" markerEnd={marker} opacity={0.8} strokeLinecap="round" style={{ animation: 'flowDash 1s linear infinite' }} />
+                  <path d={path} fill="none" stroke={color} strokeWidth={2.5} markerEnd={marker} opacity={0.95} strokeLinecap="round" />
                   {rel.label && (
                     <g>
                       <rect x={midX - rel.label.length * 3.5 - 6} y={midY - 10} width={rel.label.length * 7 + 12} height={18} rx={4} fill="rgba(0,0,0,0.8)" />
@@ -6919,7 +7102,7 @@ function SequenceDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
                 const loopHeight = 30;
                 return (
                   <g key={`msg-${i}`}>
-                    <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msgColor} /></marker></defs>
+                    <defs><marker id={`seq-arr-${i}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={msgColor} /></marker></defs>
                     {/* Self-loop path */}
                     <path
                       d={`M ${fromX} ${y} L ${fromX + loopWidth} ${y} L ${fromX + loopWidth} ${y + loopHeight} L ${fromX + 8} ${y + loopHeight}`}
@@ -6936,13 +7119,13 @@ function SequenceDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
 
               return (
                 <g key={`msg-${i}`}>
-                  <defs><marker id={`seq-arr-${i}`} markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={msgColor} /></marker></defs>
+                  <defs><marker id={`seq-arr-${i}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={msgColor} /></marker></defs>
                   {/* Outer glow */}
                   <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={6} strokeOpacity={0.1} strokeLinecap="round" />
                   {/* Inner glow */}
                   <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={4} strokeOpacity={0.2} strokeLinecap="round" />
                   {/* Main stroke */}
-                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={2} strokeDasharray={msg.isReturn ? "4,3" : "none"} markerEnd={`url(#seq-arr-${i})`} />
+                  <line x1={fromX} y1={y} x2={toX - (fromX < toX ? 8 : -8)} y2={y} stroke={msgColor} strokeWidth={2.5} strokeDasharray={msg.isReturn ? "6,4" : null} markerEnd={`url(#seq-arr-${i})`} />
                   <rect x={Math.min(fromX, toX) + Math.abs(toX - fromX) / 2 - 50} y={y - 20} width={100} height={18} rx={4} fill="rgba(0,0,0,0.85)" />
                   <text x={Math.min(fromX, toX) + Math.abs(toX - fromX) / 2} y={y - 7} textAnchor="middle" fill={msgColor} fontSize={11}>{msg.label}</text>
                 </g>
@@ -8420,7 +8603,12 @@ function ComponentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLab
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="comp-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.purple} /></marker></defs>
+          <defs>
+            {/* Component diagram arrow - sharp arrowhead */}
+            <marker id="comp-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.purple} />
+            </marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {connections.map((conn, i) => {
               const src = layout.find(c => c.id === conn.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
@@ -8433,7 +8621,7 @@ function ComponentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLab
               const path = `M ${sp.x + (dx/dist)*75} ${sp.y + (dy/dist)*50} Q ${midX + perpX} ${midY + perpY} ${tp.x - (dx/dist)*75} ${tp.y - (dy/dist)*50}`;
               return (
                 <g key={i}>
-                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#comp-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  <path d={path} fill="none" stroke={COLORS.purple} strokeWidth={2.5} markerEnd="url(#comp-arrow)" opacity={0.95} />
                   {conn.label && <text x={midX + perpX} y={midY + perpY - 8} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{conn.label}</text>}
                 </g>
               );
@@ -8653,7 +8841,12 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
       <div ref={canvas.canvasRef} className="canvas-bg" onClick={handleCanvasClick} onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="c4-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.cyan} /></marker></defs>
+          <defs>
+            {/* C4 diagram arrow - sharp arrowhead */}
+            <marker id="c4-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.cyan} />
+            </marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {relationships.map((rel, i) => {
               const src = layout.find(e => e.id === rel.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
@@ -8666,7 +8859,7 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
               const path = `M ${sp.x + (dx/dist)*85} ${sp.y + (dy/dist)*60} Q ${midX + perpX} ${midY + perpY} ${tp.x - (dx/dist)*85} ${tp.y - (dy/dist)*60}`;
               return (
                 <g key={i}>
-                  <path d={path} fill="none" stroke={COLORS.cyan} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#c4-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  <path d={path} fill="none" stroke={COLORS.cyan} strokeWidth={2.5} markerEnd="url(#c4-arrow)" opacity={0.95} />
                   {rel.label && (
                     <g>
                       <rect x={midX + perpX - rel.label.length * 3.5 - 6} y={midY + perpY - 18} width={rel.label.length * 7 + 12} height={16} rx={4} fill="rgba(0,0,0,0.8)" />
@@ -8768,7 +8961,12 @@ function RequirementDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
       <div ref={canvas.canvasRef} className="canvas-bg" onMouseDown={canvas.handleCanvasMouseDown} onMouseMove={canvas.handleMouseMove} onMouseUp={canvas.handleMouseUp} onMouseLeave={canvas.handleMouseUp} onTouchStart={canvas.handleTouchStart} onTouchMove={canvas.handleTouchMove} onTouchEnd={canvas.handleTouchEnd} onWheel={canvas.handleWheel} style={{ width: '100%', height: '100%', cursor: canvas.isPanning ? 'grabbing' : canvas.dragging ? 'grabbing' : 'grab', touchAction: 'none' }}>
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
-          <defs><marker id="req-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill={COLORS.orange} /></marker></defs>
+          <defs>
+            {/* Requirements diagram arrow - sharp arrowhead */}
+            <marker id="req-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.orange} />
+            </marker>
+          </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
             {traces.map((trace, i) => {
               const src = layout.find(r => r.id === trace.from.toLowerCase().replace(/[^a-z0-9]/g, '_'));
@@ -8778,7 +8976,7 @@ function RequirementDiagram({ data, theme = THEMES.dark, sketchMode = false }) {
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
               return (
                 <g key={i}>
-                  <line x1={sp.x + (dx/dist)*120} y1={sp.y + (dy/dist)*65} x2={tp.x - (dx/dist)*120} y2={tp.y - (dy/dist)*65} stroke={COLORS.orange} strokeWidth={2} strokeDasharray="8,4" markerEnd="url(#req-arrow)" opacity={0.8} style={{ animation: 'flowDash 1s linear infinite' }} />
+                  <line x1={sp.x + (dx/dist)*120} y1={sp.y + (dy/dist)*65} x2={tp.x - (dx/dist)*120} y2={tp.y - (dy/dist)*65} stroke={COLORS.orange} strokeWidth={2.5} markerEnd="url(#req-arrow)" opacity={0.95} />
                   {trace.label && <text x={(sp.x+tp.x)/2} y={(sp.y+tp.y)/2 - 8} textAnchor="middle" fill={theme.textSecondary} fontSize={10}>{trace.label}</text>}
                 </g>
               );
@@ -9150,8 +9348,8 @@ function SwimlaneDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabe
           style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}
         >
           <defs>
-            <marker id="swimlane-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill={theme.textSecondary} />
+            <marker id="swimlane-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={theme.textSecondary} />
             </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
