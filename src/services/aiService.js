@@ -112,24 +112,70 @@ Checkout -> Order Confirmed
 6. ARCHITECTURE DIAGRAM (type: architecture)
 ================================================================================
 Syntax:
+- Title/subtitle (optional): title: Name, subtitle: Description
 - Define layers: [layerType] Item1, Item2, Item3
-- Layer types: clients, gateway, services, databases, data, cache, queue, storage
-- Connections: Item1 -> Item2
+- With descriptions: [layerType] Item: Description
+- Layer types: clients, frontend, gateway, api, services, backend, data, database, cache, queue, storage, external
 
-Example:
+C4-Style Node Types (for detailed diagrams):
+- [person] User: Description
+- [system] System: Description
+- [webapp] Web App: Technology
+- [mobileapp] Mobile: Technology
+- [service] Service: Description
+- [component] Component: Description
+- [server] Server: Description
+- [monitoring] Tool: Description
+- [logging] Logger: Description
+
+Grouping with Boundaries (for organized layouts):
+boundary "Group Name" {
+  [type] Component1: Description
+  [type] Component2: Description
+}
+
+Connections:
+- Source -> Target (solid)
+- Source -> Target: label
+- Source --> Target (dotted)
+- Source ==> Target (thick)
+
+Example (Simple):
 <!-- type: architecture -->
 [clients] Web App, Mobile App
 [gateway] API Gateway
-[services] Auth Service, User Service, Order Service
+[services] Auth Service, User Service
 [data] PostgreSQL, Redis
 
 Web App -> API Gateway
-Mobile App -> API Gateway
 API Gateway -> Auth Service
-API Gateway -> User Service
-API Gateway -> Order Service
-User Service -> PostgreSQL
-Auth Service -> Redis
+
+Example (With Boundaries - C4 Style):
+<!-- type: architecture -->
+title: E-Commerce Platform
+subtitle: Container Diagram
+
+[person] Customer: Online shopper
+[external] Payment Gateway: Stripe
+
+boundary "Web Layer" {
+  [webapp] Web App: React SPA
+  [mobileapp] Mobile: React Native
+}
+
+boundary "Services" {
+  [service] User Service: Auth
+  [service] Order Service: Orders
+}
+
+boundary "Data Layer" {
+  [database] PostgreSQL: Primary DB
+  [cache] Redis: Sessions
+}
+
+Customer -> Web App: Uses
+Web App -> User Service: API
+Order Service -> PostgreSQL: Writes
 
 ================================================================================
 7. STATE MACHINE (type: state)
@@ -437,21 +483,44 @@ User Service --> PostgreSQL
 ================================================================================
 Syntax:
 - [type] Name: Description
-- Types: person, system, container, component, external
+- Types: person, system, container, component, external, database, webapp, mobileapp, service
 - Relationships: Element1 -> Element2: Description
 
-Example:
+Grouping with Boundaries (for system containers):
+boundary "System Name" {
+  [container] Component1: Description
+  [container] Component2: Description
+}
+
+Example (Simple):
 <!-- type: c4 -->
 [person] User: A customer
 [system] Web App: Main application
 [container] API: REST API service
-[container] Database: PostgreSQL
+[database] Database: PostgreSQL
 [external] Payment Gateway: Stripe
 
 User -> Web App: Uses
 Web App -> API: Calls
 API -> Database: Reads/Writes
-API -> Payment Gateway: Processes payments
+
+Example (With Boundaries):
+<!-- type: c4 -->
+[person] Customer: End user
+[external] Email Service: SendGrid
+
+boundary "Banking System" {
+  [webapp] Web App: React SPA
+  [container] API Gateway: Kong
+  [service] Auth Service: JWT auth
+  [service] Account Service: Account management
+  [database] Database: PostgreSQL
+}
+
+Customer -> Web App: Uses
+Web App -> API Gateway: HTTPS
+API Gateway -> Auth Service: Validates
+Auth Service -> Database: Queries
 
 ================================================================================
 22. REQUIREMENT DIAGRAM (type: requirement)

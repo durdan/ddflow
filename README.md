@@ -428,6 +428,86 @@ const svg = await exportToSVG(diagramRef);
 
 ---
 
+## 🤖 AI Integration
+
+DDFlow provides exportable DSL references for AI-powered diagram generation. Use these with any LLM (GPT-4, Claude, etc.) to generate correct DSL.
+
+### Using DSL Reference with Your AI
+
+```tsx
+import {
+  DSL_REFERENCE,        // Complete DSL syntax documentation
+  AI_PROMPT_TEMPLATE,   // Ready-to-use AI prompt
+  createAIPrompt,       // Function to create prompts
+  getDSLForType,        // Get syntax for specific type
+  getCompactReference   // Shorter reference for token limits
+} from 'ddflow';
+
+// Option 1: Use the complete AI prompt template
+const prompt = AI_PROMPT_TEMPLATE.replace('{USER_INPUT}', 'Create an e-commerce architecture');
+
+// Option 2: Create a custom prompt
+const myPrompt = createAIPrompt('Draw a user authentication flowchart');
+
+// Option 3: Get syntax for specific diagram type
+const archSyntax = getDSLForType('architecture');
+
+// Option 4: Use compact reference (for token-limited contexts)
+const shortRef = getCompactReference();
+```
+
+### Example: Using with OpenAI
+
+```tsx
+import { createAIPrompt, Parsers } from 'ddflow';
+
+async function generateDiagram(description) {
+  const prompt = createAIPrompt(description);
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4',
+    messages: [{ role: 'user', content: prompt }]
+  });
+
+  const dsl = response.choices[0].message.content;
+  const type = dsl.match(/<!-- type: (\w+) -->/)?.[1] || 'flowchart';
+  const data = Parsers[type](dsl);
+
+  return { type, data, dsl };
+}
+```
+
+### Architecture Diagram with Boundaries (C4 Style)
+
+```
+title: E-Commerce Platform
+subtitle: Container Diagram
+
+[person] Customer: Online shopper
+[external] Payment Gateway: Stripe
+
+boundary "Web Layer" {
+  [webapp] Web App: React SPA
+  [mobileapp] Mobile App: React Native
+}
+
+boundary "Services" {
+  [service] User Service: Authentication
+  [service] Order Service: Order management
+}
+
+boundary "Data Layer" {
+  [database] PostgreSQL: Primary DB
+  [cache] Redis: Session cache
+}
+
+Customer -> Web App: Uses
+Web App -> User Service: API calls
+Order Service -> PostgreSQL: Writes
+```
+
+---
+
 ## 📦 Individual Components
 
 Import only what you need for smaller bundles:

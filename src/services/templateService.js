@@ -127,59 +127,104 @@ Verify Fix -> (end) Resolved`,
   {
     id: 'microservices',
     name: 'Microservices Architecture',
-    description: 'Modern microservices with API gateway and message queue',
+    description: 'C4-style microservices with boundaries and layers',
     category: TEMPLATE_CATEGORIES.ARCHITECTURE,
     type: 'architecture',
     thumbnail: 'architecture',
-    source: `[clients] Web App, Mobile App, Third-Party
-[gateway] API Gateway, Load Balancer
-[services] Auth Service, User Service, Product Service, Order Service, Payment Service, Notification Service
-[queue] RabbitMQ, Redis Cache
-[data] PostgreSQL, MongoDB, Elasticsearch
+    source: `title: Microservices Platform
+subtitle: Container Diagram
 
+[person] Customer: End user
+[person] Developer: API consumer
+[external] Payment Provider: Stripe
+
+boundary "Client Applications" {
+[webapp] Web App: React SPA
+[mobileapp] Mobile App: React Native
+}
+
+boundary "API Layer" {
+[gateway] API Gateway: Kong
+[auth] Auth Service: OAuth2/JWT
+}
+
+boundary "Core Services" {
+[service] User Service: User management
+[service] Product Service: Catalog
+[service] Order Service: Checkout
+[service] Notification Service: Alerts
+}
+
+boundary "Data Stores" {
+[database] PostgreSQL: Primary data
+[database] MongoDB: Products
+[cache] Redis: Sessions
+[queue] RabbitMQ: Events
+}
+
+Customer -> Web App: Uses
+Customer -> Mobile App: Uses
+Developer -> API Gateway: API calls
 Web App -> API Gateway
 Mobile App -> API Gateway
-Third-Party -> API Gateway
-API Gateway -> Load Balancer
-Load Balancer -> Auth Service
-Load Balancer -> User Service
-Load Balancer -> Product Service
-Load Balancer -> Order Service
-Auth Service -> Redis Cache
+API Gateway -> Auth Service: Validates
+API Gateway -> User Service
+API Gateway -> Product Service
+API Gateway -> Order Service
+Order Service -> Payment Provider: Payments
 User Service -> PostgreSQL
 Product Service -> MongoDB
-Product Service -> Elasticsearch
 Order Service -> PostgreSQL
-Order Service -> RabbitMQ
-Payment Service -> RabbitMQ
-Notification Service -> RabbitMQ`,
+Auth Service -> Redis: Sessions
+Order Service -> RabbitMQ: Events`,
   },
   {
     id: 'serverless',
     name: 'Serverless Architecture',
-    description: 'AWS serverless architecture with Lambda and DynamoDB',
+    description: 'AWS serverless with Lambda, DynamoDB & C4 boundaries',
     category: TEMPLATE_CATEGORIES.ARCHITECTURE,
     type: 'architecture',
     thumbnail: 'architecture',
-    source: `[clients] Web Client, Mobile Client
-[gateway] API Gateway, CloudFront CDN
-[services] Auth Lambda, API Lambda, Worker Lambda
-[queue] SQS Queue, SNS Topics
-[storage] S3 Bucket
-[data] DynamoDB, ElastiCache
+    source: `title: Serverless Platform
+subtitle: AWS Deployment Diagram
 
-Web Client -> CloudFront CDN
-Mobile Client -> API Gateway
-CloudFront CDN -> S3 Bucket
-API Gateway -> Auth Lambda
-API Gateway -> API Lambda
-Auth Lambda -> DynamoDB
-API Lambda -> DynamoDB
-API Lambda -> ElastiCache
-API Lambda -> SQS Queue
-SQS Queue -> Worker Lambda
-Worker Lambda -> SNS Topics
-Worker Lambda -> S3 Bucket`,
+[person] User: App user
+[external] Stripe: Payments
+
+boundary "CDN & Edge" {
+[cdn] CloudFront: CDN
+[storage] S3: Static assets
+}
+
+boundary "API & Compute" {
+[gateway] API Gateway: REST API
+[lambda] Auth Lambda: Authentication
+[lambda] API Lambda: Business logic
+[lambda] Worker Lambda: Background jobs
+}
+
+boundary "Messaging" {
+[queue] SQS: Job queue
+[pubsub] SNS: Notifications
+}
+
+boundary "Data" {
+[database] DynamoDB: NoSQL data
+[cache] ElastiCache: Redis cache
+}
+
+User -> CloudFront: Web access
+User -> API Gateway: API calls
+CloudFront -> S3: Static content
+API Gateway -> Auth Lambda: Auth
+API Gateway -> API Lambda: Requests
+Auth Lambda -> DynamoDB: Users
+API Lambda -> DynamoDB: Data
+API Lambda -> ElastiCache: Cache
+API Lambda -> SQS: Queue jobs
+SQS -> Worker Lambda: Process
+Worker Lambda -> SNS: Notify
+API Lambda -> Stripe: Payments`,
   },
   {
     id: 'event-driven',
@@ -665,30 +710,56 @@ Admin -> Generate Reports`,
   {
     id: 'c4-system',
     name: 'C4 System Context',
-    description: 'C4 model system context diagram',
+    description: 'C4 model with boundaries and groupings',
     category: TEMPLATE_CATEGORIES.SOFTWARE_DESIGN,
     type: 'c4',
     thumbnail: 'c4',
-    source: `[person] Customer: A registered user of the system
-[person] Admin: System administrator
-[system] E-Commerce Platform: Main application for online shopping
-[container] Web Application: React SPA
-[container] Mobile App: iOS/Android app
-[container] API Server: Node.js backend
-[container] Database: PostgreSQL
-[external] Payment Gateway: Stripe
-[external] Email Service: SendGrid
-[external] Analytics: Google Analytics
+    source: `title: E-Commerce Platform Architecture
+subtitle: C4 Container Diagram with Boundaries
 
-Customer -> Web Application: Browse and purchase
-Customer -> Mobile App: Browse and purchase
-Admin -> Web Application: Manage system
-Web Application -> API Server: API calls
-Mobile App -> API Server: API calls
-API Server -> Database: Read/Write data
-API Server -> Payment Gateway: Process payments
-API Server -> Email Service: Send notifications
-Web Application -> Analytics: Track events`,
+[person] Customer: Online shopper
+[person] Admin: Platform administrator
+
+boundary "Web Layer" {
+  [container] Web App: React SPA
+  [container] Mobile App: React Native
+  [container] Admin Portal: Vue.js Dashboard
+}
+
+boundary "API Layer" {
+  [container] API Gateway: Kong/NGINX
+  [container] Auth Service: JWT/OAuth2
+  [container] Order Service: Node.js
+  [container] Product Service: Go microservice
+}
+
+boundary "Data Layer" {
+  [database] PostgreSQL: Orders & Users
+  [database] MongoDB: Product Catalog
+  [database] Redis: Session Cache
+}
+
+boundary "External Services" {
+  [external] Stripe: Payment Processing
+  [external] SendGrid: Email Notifications
+  [external] AWS S3: Media Storage
+}
+
+Customer -> Web App: Browse & Purchase
+Customer -> Mobile App: Shop on-the-go
+Admin -> Admin Portal: Manage Platform
+Web App -> API Gateway: HTTPS/REST
+Mobile App -> API Gateway: HTTPS/REST
+Admin Portal -> API Gateway: Admin API
+API Gateway -> Auth Service: Validate Token
+API Gateway -> Order Service: Order Operations
+API Gateway -> Product Service: Product CRUD
+Order Service -> PostgreSQL: Store Orders
+Product Service -> MongoDB: Product Data
+Auth Service -> Redis: Cache Sessions
+Order Service -> Stripe: Process Payment
+Order Service -> SendGrid: Order Confirmation
+Product Service -> AWS S3: Product Images`,
   },
 
   // ============================================

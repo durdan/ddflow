@@ -19,6 +19,7 @@ import { useKeyboardShortcuts, getShortcutsByCategory, formatShortcutKey, SHORTC
 import { getCurrentDiagram, saveCurrentDiagram, exportAsFile, importFromFile, getRecentFiles, removeFromRecentFiles, formatDate, isAutoSaveEnabled, setAutoSaveEnabled, getColorSettings, saveColorSettings, DEFAULT_COLOR_SETTINGS } from './services/storageService.js';
 import { mermaidToDDFlow, ddflowToMermaid, downloadMermaidFile, copyMermaidToClipboard, detectMermaidType } from './services/mermaidService.js';
 import useUndoRedo from './hooks/useUndoRedo.js';
+import DSLReference, { DSL_REFERENCE, DSL_SYNTAX, DIAGRAM_TYPES, AI_PROMPT_TEMPLATE, getDSLForType, getAvailableTypes, createAIPrompt, getCompactReference } from './dslReference.js';
 
 // Simple debounce utility
 function debounce(fn, delay) {
@@ -47,6 +48,7 @@ const THEMES = {
     textMuted: '#555555',
     border: 'rgba(255,255,255,0.1)',
     surface: 'rgba(15, 23, 42, 0.95)',
+    cardBg: 'rgba(15, 23, 42, 0.95)',
     headerBg: 'transparent',
     toolbarBg: 'transparent',
     editorBg: 'rgba(0,0,0,0.3)',
@@ -67,6 +69,7 @@ const THEMES = {
     textMuted: '#94a3b8',
     border: 'rgba(0,0,0,0.1)',
     surface: 'rgba(255, 255, 255, 0.95)',
+    cardBg: 'rgba(255, 255, 255, 0.95)',
     headerBg: 'rgba(255,255,255,0.8)',
     toolbarBg: 'rgba(255,255,255,0.6)',
     editorBg: 'rgba(255,255,255,0.95)',
@@ -118,6 +121,54 @@ const COLORS = {
   slate: '#64748B', zinc: '#71717A', yellow: '#EAB308'
 };
 
+// Pastel colors for layered architecture diagram containers
+const LAYER_COLORS = {
+  // Frontend/Client layer - Light green
+  clients: '#dcfce7', client: '#dcfce7', frontend: '#dcfce7',
+  web: '#dcfce7', mobile: '#dcfce7', users: '#dcfce7', user: '#dcfce7',
+  // Gateway/API layer - Light yellow
+  gateway: '#fef9c3', gateways: '#fef9c3', api: '#fef9c3',
+  lb: '#fef9c3', loadbalancer: '#fef9c3', proxy: '#fef9c3', cdn: '#fef9c3',
+  // Services/Backend layer - Light blue
+  services: '#dbeafe', service: '#dbeafe', backend: '#dbeafe',
+  microservices: '#dbeafe', microservice: '#dbeafe', functions: '#dbeafe',
+  // Data/Storage layer - Light purple
+  data: '#f3e8ff', database: '#f3e8ff', databases: '#f3e8ff',
+  storage: '#f3e8ff', db: '#f3e8ff',
+  // Cache layer - Light red
+  cache: '#fecaca', redis: '#fecaca', memcached: '#fecaca',
+  // Queue/Messaging layer - Light amber
+  queue: '#fef3c7', queues: '#fef3c7', kafka: '#fef3c7',
+  messaging: '#fef3c7', eventbus: '#fef3c7',
+  // Monitoring layer - Light fuchsia
+  monitoring: '#fae8ff', metrics: '#fae8ff', logging: '#fae8ff',
+  // Security layer - Light indigo
+  auth: '#e0e7ff', security: '#e0e7ff', identity: '#e0e7ff',
+  // External layer - Light gray
+  external: '#f1f5f9', thirdparty: '#f1f5f9', saas: '#f1f5f9',
+  // Default
+  default: '#f1f5f9'
+};
+
+// Darker border colors for layer containers
+const LAYER_BORDER_COLORS = {
+  clients: '#86efac', client: '#86efac', frontend: '#86efac',
+  web: '#86efac', mobile: '#86efac', users: '#86efac', user: '#86efac',
+  gateway: '#fde047', gateways: '#fde047', api: '#fde047',
+  lb: '#fde047', loadbalancer: '#fde047', proxy: '#fde047', cdn: '#fde047',
+  services: '#93c5fd', service: '#93c5fd', backend: '#93c5fd',
+  microservices: '#93c5fd', microservice: '#93c5fd', functions: '#93c5fd',
+  data: '#d8b4fe', database: '#d8b4fe', databases: '#d8b4fe',
+  storage: '#d8b4fe', db: '#d8b4fe',
+  cache: '#fca5a5', redis: '#fca5a5', memcached: '#fca5a5',
+  queue: '#fcd34d', queues: '#fcd34d', kafka: '#fcd34d',
+  messaging: '#fcd34d', eventbus: '#fcd34d',
+  monitoring: '#f0abfc', metrics: '#f0abfc', logging: '#f0abfc',
+  auth: '#a5b4fc', security: '#a5b4fc', identity: '#a5b4fc',
+  external: '#cbd5e1', thirdparty: '#cbd5e1', saas: '#cbd5e1',
+  default: '#cbd5e1'
+};
+
 const BRANCH_COLORS = [COLORS.purple, COLORS.blue, COLORS.green, COLORS.orange, COLORS.pink, COLORS.cyan, COLORS.violet, COLORS.teal];
 
 // ============================================
@@ -129,7 +180,8 @@ const getNodeGradient = (color, isSketch = false) => {
   if (isSketch) {
     return SKETCH_COLORS.fill;
   }
-  return `linear-gradient(135deg, ${color}38, ${color}15)`;
+  // Solid fill with color at 45% opacity for better visibility
+  return `linear-gradient(135deg, ${color}70, ${color}50)`;
 };
 
 // Generate layered shadow for nodes based on state (sketch mode has no shadows)
@@ -1849,112 +1901,165 @@ const Parsers = {
 
   architecture: (text) => {
     const nodes = new Map(), edges = [], groups = [];
+    const layers = new Map(); // For layered mode: type -> { nodes: [], order, label }
+    let layerOrder = 0;
+
+    // Parse title and subtitle at the beginning
+    let title = null, subtitle = null;
+    const titleMatch = text.match(/^title:\s*(.+)$/im);
+    const subtitleMatch = text.match(/^subtitle:\s*(.+)$/im);
+    if (titleMatch) title = titleMatch[1].trim();
+    if (subtitleMatch) subtitle = subtitleMatch[1].trim();
+
     const typeStyles = {
+      // ===== C4 MODEL TYPES =====
+      // Context Level - People and Systems
+      person: { color: '#08427B', icon: '👤', shape: 'person', label: 'Person' },
+      actor: { color: '#08427B', icon: '👤', shape: 'person', label: 'Actor' },
+      system: { color: '#1168BD', icon: '🏢', shape: 'rect', label: 'Software System' },
+      software: { color: '#1168BD', icon: '🏢', shape: 'rect', label: 'Software System' },
+
+      // Container Level
+      webapp: { color: '#438DD5', icon: '🌐', shape: 'rect', label: 'Web Application' },
+      mobileapp: { color: '#438DD5', icon: '📱', shape: 'rect', label: 'Mobile App' },
+      spa: { color: '#438DD5', icon: '⚛️', shape: 'rect', label: 'SPA' },
+      desktop: { color: '#438DD5', icon: '🖥️', shape: 'rect', label: 'Desktop App' },
+
+      // Component Level
+      component: { color: '#85BBF0', icon: '⚙️', shape: 'rect', label: 'Component' },
+      controller: { color: '#85BBF0', icon: '🎮', shape: 'rect', label: 'Controller' },
+      repository: { color: '#85BBF0', icon: '📚', shape: 'rect', label: 'Repository' },
+      facade: { color: '#85BBF0', icon: '🎭', shape: 'rect', label: 'Facade' },
+
+      // Code Level
+      class: { color: '#B8D4E8', icon: '📄', shape: 'rect', label: 'Class' },
+      interface: { color: '#B8D4E8', icon: '📋', shape: 'rect', label: 'Interface' },
+      module: { color: '#B8D4E8', icon: '📦', shape: 'rect', label: 'Module' },
+
+      // Deployment Level - Infrastructure
+      server: { color: '#999999', icon: '🖥️', shape: 'rect', label: 'Server' },
+      vm: { color: '#999999', icon: '💻', shape: 'rect', label: 'Virtual Machine' },
+      instance: { color: '#999999', icon: '🖥️', shape: 'rect', label: 'Instance' },
+      deployment: { color: '#999999', icon: '🚀', shape: 'rect', label: 'Deployment Node' },
+      infrastructure: { color: '#666666', icon: '🏗️', shape: 'rect', label: 'Infrastructure' },
+      datacenter: { color: '#666666', icon: '🏢', shape: 'rect', label: 'Data Center' },
+
+      // External Systems
+      external: { color: '#999999', icon: '🔗', shape: 'rect', label: 'External System' },
+      thirdparty: { color: '#999999', icon: '🔗', shape: 'rect', label: 'Third Party' },
+
+      // ===== ARCHITECTURE TYPES =====
       // Client/Frontend
-      clients: { color: COLORS.pink, icon: '🖥️', shape: 'rect' },
-      client: { color: COLORS.pink, icon: '🖥️', shape: 'rect' },
-      web: { color: COLORS.pink, icon: '🌐', shape: 'rect' },
-      mobile: { color: COLORS.pink, icon: '📱', shape: 'rect' },
-      browser: { color: COLORS.pink, icon: '🌐', shape: 'rect' },
-      user: { color: COLORS.pink, icon: '👤', shape: 'rect' },
-      users: { color: COLORS.pink, icon: '👥', shape: 'rect' },
+      clients: { color: COLORS.pink, icon: '🖥️', shape: 'rect', label: 'Clients' },
+      client: { color: COLORS.pink, icon: '🖥️', shape: 'rect', label: 'Client' },
+      web: { color: COLORS.pink, icon: '🌐', shape: 'rect', label: 'Web' },
+      mobile: { color: COLORS.pink, icon: '📱', shape: 'rect', label: 'Mobile' },
+      browser: { color: COLORS.pink, icon: '🌐', shape: 'rect', label: 'Browser' },
+      user: { color: COLORS.pink, icon: '👤', shape: 'rect', label: 'User' },
+      users: { color: COLORS.pink, icon: '👥', shape: 'rect', label: 'Users' },
 
       // Gateway/Network
-      gateway: { color: COLORS.orange, icon: '🚪', shape: 'hexagon' },
-      gateways: { color: COLORS.orange, icon: '🚪', shape: 'hexagon' },
-      api: { color: COLORS.orange, icon: '🔌', shape: 'hexagon' },
-      lb: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon' },
-      loadbalancer: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon' },
-      proxy: { color: COLORS.orange, icon: '🔀', shape: 'hexagon' },
-      cdn: { color: COLORS.orange, icon: '🌍', shape: 'hexagon' },
-      dns: { color: COLORS.orange, icon: '📍', shape: 'rect' },
-      firewall: { color: COLORS.red, icon: '🛡️', shape: 'hexagon' },
+      gateway: { color: COLORS.orange, icon: '🚪', shape: 'hexagon', label: 'Gateway' },
+      gateways: { color: COLORS.orange, icon: '🚪', shape: 'hexagon', label: 'Gateways' },
+      api: { color: COLORS.orange, icon: '🔌', shape: 'hexagon', label: 'API' },
+      lb: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon', label: 'Load Balancer' },
+      loadbalancer: { color: COLORS.orange, icon: '⚖️', shape: 'hexagon', label: 'Load Balancer' },
+      proxy: { color: COLORS.orange, icon: '🔀', shape: 'hexagon', label: 'Proxy' },
+      cdn: { color: COLORS.orange, icon: '🌍', shape: 'hexagon', label: 'CDN' },
+      dns: { color: COLORS.orange, icon: '📍', shape: 'rect', label: 'DNS' },
+      firewall: { color: COLORS.red, icon: '🛡️', shape: 'hexagon', label: 'Firewall' },
 
       // Services/Backend
-      services: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
-      service: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
-      backend: { color: COLORS.blue, icon: '⚙️', shape: 'rect' },
-      microservice: { color: COLORS.blue, icon: '🔷', shape: 'rect' },
-      microservices: { color: COLORS.blue, icon: '🔷', shape: 'rect' },
-      function: { color: COLORS.violet, icon: 'λ', shape: 'rect' },
-      lambda: { color: COLORS.violet, icon: 'λ', shape: 'rect' },
-      serverless: { color: COLORS.violet, icon: '☁️', shape: 'rect' },
-      worker: { color: COLORS.blue, icon: '👷', shape: 'rect' },
+      services: { color: COLORS.blue, icon: '⚙️', shape: 'rect', label: 'Services' },
+      service: { color: COLORS.blue, icon: '⚙️', shape: 'rect', label: 'Service' },
+      backend: { color: COLORS.blue, icon: '⚙️', shape: 'rect', label: 'Backend' },
+      microservice: { color: COLORS.blue, icon: '🔷', shape: 'rect', label: 'Microservice' },
+      microservices: { color: COLORS.blue, icon: '🔷', shape: 'rect', label: 'Microservices' },
+      function: { color: COLORS.violet, icon: 'λ', shape: 'rect', label: 'Function' },
+      lambda: { color: COLORS.violet, icon: 'λ', shape: 'rect', label: 'Lambda' },
+      serverless: { color: COLORS.violet, icon: '☁️', shape: 'rect', label: 'Serverless' },
+      worker: { color: COLORS.blue, icon: '👷', shape: 'rect', label: 'Worker' },
 
       // Containers/Orchestration
-      container: { color: COLORS.cyan, icon: '📦', shape: 'rect' },
-      containers: { color: COLORS.cyan, icon: '📦', shape: 'rect' },
-      docker: { color: COLORS.cyan, icon: '🐳', shape: 'rect' },
-      k8s: { color: COLORS.cyan, icon: '☸️', shape: 'rect' },
-      kubernetes: { color: COLORS.cyan, icon: '☸️', shape: 'rect' },
-      pod: { color: COLORS.cyan, icon: '🫛', shape: 'rect' },
-      pods: { color: COLORS.cyan, icon: '🫛', shape: 'rect' },
-      cluster: { color: COLORS.cyan, icon: '🔷', shape: 'rect' },
-      node: { color: COLORS.cyan, icon: '🖥️', shape: 'rect' },
+      container: { color: COLORS.cyan, icon: '📦', shape: 'rect', label: 'Container' },
+      containers: { color: COLORS.cyan, icon: '📦', shape: 'rect', label: 'Containers' },
+      docker: { color: COLORS.cyan, icon: '🐳', shape: 'rect', label: 'Docker' },
+      k8s: { color: COLORS.cyan, icon: '☸️', shape: 'rect', label: 'Kubernetes' },
+      kubernetes: { color: COLORS.cyan, icon: '☸️', shape: 'rect', label: 'Kubernetes' },
+      pod: { color: COLORS.cyan, icon: '🫛', shape: 'rect', label: 'Pod' },
+      pods: { color: COLORS.cyan, icon: '🫛', shape: 'rect', label: 'Pods' },
+      cluster: { color: COLORS.cyan, icon: '🔷', shape: 'rect', label: 'Cluster' },
+      node: { color: COLORS.cyan, icon: '🖥️', shape: 'rect', label: 'Node' },
 
       // Data/Storage
-      databases: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
-      database: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
-      db: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
-      data: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
-      sql: { color: COLORS.emerald, icon: '📊', shape: 'cylinder' },
-      nosql: { color: COLORS.emerald, icon: '📋', shape: 'cylinder' },
-      storage: { color: COLORS.emerald, icon: '💾', shape: 'cylinder' },
-      s3: { color: COLORS.emerald, icon: '🪣', shape: 'cylinder' },
-      blob: { color: COLORS.emerald, icon: '📁', shape: 'cylinder' },
+      databases: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder', label: 'Databases' },
+      database: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder', label: 'Database' },
+      db: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder', label: 'Database' },
+      data: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder', label: 'Data' },
+      sql: { color: COLORS.emerald, icon: '📊', shape: 'cylinder', label: 'SQL' },
+      nosql: { color: COLORS.emerald, icon: '📋', shape: 'cylinder', label: 'NoSQL' },
+      storage: { color: COLORS.emerald, icon: '💾', shape: 'cylinder', label: 'Storage' },
+      s3: { color: COLORS.emerald, icon: '🪣', shape: 'cylinder', label: 'S3' },
+      blob: { color: COLORS.emerald, icon: '📁', shape: 'cylinder', label: 'Blob' },
 
       // Cache/Memory
-      cache: { color: COLORS.red, icon: '⚡', shape: 'cylinder' },
-      redis: { color: COLORS.red, icon: '⚡', shape: 'cylinder' },
-      memcached: { color: COLORS.red, icon: '🧠', shape: 'cylinder' },
+      cache: { color: COLORS.red, icon: '⚡', shape: 'cylinder', label: 'Cache' },
+      redis: { color: COLORS.red, icon: '⚡', shape: 'cylinder', label: 'Redis' },
+      memcached: { color: COLORS.red, icon: '🧠', shape: 'cylinder', label: 'Memcached' },
 
       // Messaging/Queue
-      queue: { color: COLORS.amber, icon: '📬', shape: 'rect' },
-      queues: { color: COLORS.amber, icon: '📬', shape: 'rect' },
-      mq: { color: COLORS.amber, icon: '📨', shape: 'rect' },
-      kafka: { color: COLORS.amber, icon: '📊', shape: 'rect' },
-      rabbitmq: { color: COLORS.amber, icon: '🐰', shape: 'rect' },
-      pubsub: { color: COLORS.amber, icon: '📢', shape: 'rect' },
-      eventbus: { color: COLORS.amber, icon: '🚌', shape: 'rect' },
-      stream: { color: COLORS.amber, icon: '🌊', shape: 'rect' },
+      queue: { color: COLORS.amber, icon: '📬', shape: 'rect', label: 'Queue' },
+      queues: { color: COLORS.amber, icon: '📬', shape: 'rect', label: 'Queues' },
+      mq: { color: COLORS.amber, icon: '📨', shape: 'rect', label: 'Message Queue' },
+      kafka: { color: COLORS.amber, icon: '📊', shape: 'rect', label: 'Kafka' },
+      rabbitmq: { color: COLORS.amber, icon: '🐰', shape: 'rect', label: 'RabbitMQ' },
+      pubsub: { color: COLORS.amber, icon: '📢', shape: 'rect', label: 'Pub/Sub' },
+      eventbus: { color: COLORS.amber, icon: '🚌', shape: 'rect', label: 'Event Bus' },
+      stream: { color: COLORS.amber, icon: '🌊', shape: 'rect', label: 'Stream' },
 
       // Monitoring/Observability
-      monitoring: { color: COLORS.fuchsia, icon: '📈', shape: 'rect' },
-      metrics: { color: COLORS.fuchsia, icon: '📊', shape: 'rect' },
-      logging: { color: COLORS.fuchsia, icon: '📝', shape: 'rect' },
-      logs: { color: COLORS.fuchsia, icon: '📝', shape: 'rect' },
-      tracing: { color: COLORS.fuchsia, icon: '🔍', shape: 'rect' },
-      alerting: { color: COLORS.fuchsia, icon: '🔔', shape: 'rect' },
+      monitoring: { color: COLORS.fuchsia, icon: '📈', shape: 'rect', label: 'Monitoring' },
+      metrics: { color: COLORS.fuchsia, icon: '📊', shape: 'rect', label: 'Metrics' },
+      logging: { color: COLORS.fuchsia, icon: '📝', shape: 'rect', label: 'Logging' },
+      logs: { color: COLORS.fuchsia, icon: '📝', shape: 'rect', label: 'Logs' },
+      tracing: { color: COLORS.fuchsia, icon: '🔍', shape: 'rect', label: 'Tracing' },
+      alerting: { color: COLORS.fuchsia, icon: '🔔', shape: 'rect', label: 'Alerting' },
 
       // Security
-      auth: { color: COLORS.indigo, icon: '🔐', shape: 'rect' },
-      identity: { color: COLORS.indigo, icon: '🆔', shape: 'rect' },
-      vault: { color: COLORS.indigo, icon: '🔒', shape: 'rect' },
-      secrets: { color: COLORS.indigo, icon: '🔑', shape: 'rect' },
+      auth: { color: COLORS.indigo, icon: '🔐', shape: 'rect', label: 'Auth' },
+      identity: { color: COLORS.indigo, icon: '🆔', shape: 'rect', label: 'Identity' },
+      vault: { color: COLORS.indigo, icon: '🔒', shape: 'rect', label: 'Vault' },
+      secrets: { color: COLORS.indigo, icon: '🔑', shape: 'rect', label: 'Secrets' },
 
       // Cloud/Infrastructure
-      cloud: { color: COLORS.sky, icon: '☁️', shape: 'rect' },
-      aws: { color: COLORS.orange, icon: '☁️', shape: 'rect' },
-      gcp: { color: COLORS.blue, icon: '☁️', shape: 'rect' },
-      azure: { color: COLORS.sky, icon: '☁️', shape: 'rect' },
-      vpc: { color: COLORS.slate, icon: '🔲', shape: 'rect' },
-      subnet: { color: COLORS.slate, icon: '📡', shape: 'rect' },
-      region: { color: COLORS.slate, icon: '🌍', shape: 'rect' },
-      zone: { color: COLORS.slate, icon: '📍', shape: 'rect' },
+      cloud: { color: COLORS.sky, icon: '☁️', shape: 'rect', label: 'Cloud' },
+      aws: { color: COLORS.orange, icon: '☁️', shape: 'rect', label: 'AWS' },
+      gcp: { color: COLORS.blue, icon: '☁️', shape: 'rect', label: 'GCP' },
+      azure: { color: COLORS.sky, icon: '☁️', shape: 'rect', label: 'Azure' },
+      vpc: { color: COLORS.slate, icon: '🔲', shape: 'rect', label: 'VPC' },
+      subnet: { color: COLORS.slate, icon: '📡', shape: 'rect', label: 'Subnet' },
+      region: { color: COLORS.slate, icon: '🌍', shape: 'rect', label: 'Region' },
+      zone: { color: COLORS.slate, icon: '📍', shape: 'rect', label: 'Zone' },
 
-      // External/Third-party
-      external: { color: COLORS.slate, icon: '🔗', shape: 'rect' },
-      thirdparty: { color: COLORS.slate, icon: '🔗', shape: 'rect' },
-      saas: { color: COLORS.slate, icon: '☁️', shape: 'rect' },
-      email: { color: COLORS.slate, icon: '📧', shape: 'rect' },
-      payment: { color: COLORS.slate, icon: '💳', shape: 'rect' },
-      analytics: { color: COLORS.slate, icon: '📊', shape: 'rect' },
+      // Third-party
+      saas: { color: COLORS.slate, icon: '☁️', shape: 'rect', label: 'SaaS' },
+      email: { color: COLORS.slate, icon: '📧', shape: 'rect', label: 'Email' },
+      payment: { color: COLORS.slate, icon: '💳', shape: 'rect', label: 'Payment' },
+      analytics: { color: COLORS.slate, icon: '📊', shape: 'rect', label: 'Analytics' },
     };
 
     // Layout constants
     const NODE_WIDTH = 150;
     const NODE_HEIGHT = 90;
-    const groupColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.amber, COLORS.pink];
+    // Distinct colors for each boundary/group layer (matching C4 style)
+    const groupColors = [
+      { bg: '#1168BD', border: '#0D5BA8' },   // Blue
+      { bg: '#2D882D', border: '#236B23' },   // Green
+      { bg: '#7B4B94', border: '#5E3A72' },   // Purple
+      { bg: '#D4652F', border: '#B85525' },   // Orange
+      { bg: '#C73E1D', border: '#A33318' },   // Red
+      { bg: '#1A9988', border: '#157A6C' },   // Teal
+    ];
 
     // First pass: Parse all nodes, edges, and groups
     let layerIndex = 0;
@@ -1998,15 +2103,33 @@ const Parsers = {
         continue;
       }
 
-      // Parse layer: [type] node1, node2
-      const layerMatch = line.match(/^\[(\w+)\]\s*(.+)/);
+      // Parse layer: [type] node1, node2 OR [type "Custom Label"] node1, node2
+      const layerMatch = line.match(/^\[(\w+)(?:\s+"([^"]+)")?\]\s*(.+)/);
       if (layerMatch) {
         const typeName = layerMatch[1].toLowerCase();
+        const customLabel = layerMatch[2] || null;
+        const nodesPart = layerMatch[3];
         const style = typeStyles[typeName] || { color: COLORS.slate, icon: '📦', shape: 'rect' };
-        const items = layerMatch[2].split(',').map(s => s.trim()).filter(s => s);
+        const items = nodesPart.split(',').map(s => s.trim()).filter(s => s);
 
         // Current innermost group
         const currentGroup = groupStack.length > 0 ? groupStack[groupStack.length - 1] : null;
+
+        // Track this layer for layered mode
+        const layerId = `layer-${typeName}-${layerOrder}`;
+        const layerLabel = customLabel || typeName.charAt(0).toUpperCase() + typeName.slice(1);
+
+        if (!layers.has(layerId)) {
+          layers.set(layerId, {
+            id: layerId,
+            type: typeName,
+            label: layerLabel,
+            nodes: [],
+            color: LAYER_COLORS[typeName] || LAYER_COLORS.default,
+            borderColor: LAYER_BORDER_COLORS[typeName] || LAYER_BORDER_COLORS.default,
+            order: layerOrder
+          });
+        }
 
         items.forEach((item) => {
           // Check for description: "NodeName: description"
@@ -2015,19 +2138,42 @@ const Parsers = {
           const description = descMatch ? descMatch[2].trim() : '';
 
           const id = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+          // Get group color index for layer-based coloring
+          const groupColorIndex = currentGroup && groupDefs.has(currentGroup)
+            ? groupDefs.get(currentGroup).colorIndex
+            : -1;
+          const layerColor = groupColorIndex >= 0
+            ? groupColors[groupColorIndex % groupColors.length]
+            : null;
           const node = {
             id,
             label,
             description,
+            type: typeName,
+            typeLabel: style.label || typeName,
             ...style,
+            // Override color with layer color if in a group
+            color: layerColor ? layerColor.bg : style.color,
             x: 0, // Will be set by dagre
             y: 0, // Will be set by dagre
             width: Math.max(NODE_WIDTH, label.length * 9 + 40),
             layerIndex,
-            group: currentGroup // Innermost group for positioning
+            layerId, // Reference to parent layer for layered mode
+            group: currentGroup, // Innermost group for positioning
+            groupColorIndex
           };
           nodes.set(id, node);
           nodeToLayer.set(id, layerIndex);
+
+          // Add node to layer for layered mode
+          layers.get(layerId).nodes.push({
+            id,
+            label,
+            description,
+            icon: style.icon,
+            shape: style.shape,
+            color: style.color
+          });
 
           // Track membership in ALL ancestor groups (for nested containment)
           if (groupStack.length > 0) {
@@ -2041,6 +2187,7 @@ const Parsers = {
           }
         });
         layerIndex++;
+        layerOrder++;
         continue;
       }
 
@@ -2153,10 +2300,10 @@ const Parsers = {
     const g = new dagre.graphlib.Graph();
     g.setGraph({
       rankdir: 'TB',        // Top to bottom
-      nodesep: isComplex ? 80 : 60,    // Tighter horizontal spacing
-      ranksep: isComplex ? 80 : 60,    // Tighter vertical spacing between layers
-      marginx: 60,
-      marginy: 50,
+      nodesep: isComplex ? 70 : 50,    // Horizontal spacing between nodes
+      ranksep: isComplex ? 50 : 40,    // Vertical spacing between layers (reduced for compactness)
+      marginx: 40,
+      marginy: 30,
       ranker: 'network-simplex' // Best for complex multi-path graphs
     });
     g.setDefaultEdgeLabel(() => ({}));
@@ -2316,7 +2463,8 @@ const Parsers = {
 
       groupDefs.get(groupName).nodes.forEach(nodeId => {
         const node = nodes.get(nodeId);
-        if (node) {
+        // Only process nodes whose .group property matches this group
+        if (node && node.group === groupName) {
           if (connectedNodeIds.has(nodeId)) {
             connectedInGroup.push(node);
           } else {
@@ -2393,10 +2541,14 @@ const Parsers = {
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-      // Include direct nodes (not in child groups)
+      // Include direct nodes (only nodes whose .group matches this group)
       groupDef.nodes.forEach(nodeId => {
         const node = nodes.get(nodeId);
         if (node) {
+          // IMPORTANT: Only include nodes whose .group property matches this group name
+          // This ensures proper separation when groups are sequential (not nested)
+          if (node.group !== groupName) return;
+
           // Check if this node is in a child group (skip if so, as child group bounds will include it)
           const nodeGroups = nodeToGroups.get(nodeId) || [];
           const isInChildGroup = nodeGroups.some(g => g !== groupName && groupDef.children.includes(g));
@@ -2432,6 +2584,7 @@ const Parsers = {
         });
 
         const bounds = groupBounds.get(groupName);
+        const layerColor = groupColors[groupDef.colorIndex % groupColors.length];
         calculatedGroups.push({
           id: `group-${groupName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
           name: groupName,
@@ -2439,7 +2592,9 @@ const Parsers = {
           y: bounds.minY,
           width: bounds.maxX - bounds.minX,
           height: bounds.maxY - bounds.minY,
-          color: groupColors[groupDef.colorIndex % groupColors.length],
+          color: layerColor.bg,
+          borderColor: layerColor.border,
+          colorIndex: groupDef.colorIndex,
           depth: getGroupDepth(groupName),
           parent: groupDef.parent
         });
@@ -2481,7 +2636,36 @@ const Parsers = {
       }
     });
 
-    return { nodes: Array.from(nodes.values()), edges, groups: calculatedGroups };
+    // Determine layout mode: 'layered' if only layer definitions, 'classic' if node-to-node edges
+    const hasNodeToNodeEdges = edges.length > 0;
+    const hasLayers = layers.size > 0;
+    const layoutMode = (hasLayers && !hasNodeToNodeEdges) ? 'layered' : 'classic';
+
+    // Convert layers Map to sorted array and generate inter-layer connections
+    const sortedLayers = Array.from(layers.values()).sort((a, b) => a.order - b.order);
+    const interLayerConnections = [];
+
+    // Generate implicit sequential connections between layers
+    for (let i = 0; i < sortedLayers.length - 1; i++) {
+      interLayerConnections.push({
+        fromLayer: sortedLayers[i].id,
+        toLayer: sortedLayers[i + 1].id,
+        label: ''
+      });
+    }
+
+    return {
+      // Classic mode data (backwards compatible)
+      nodes: Array.from(nodes.values()),
+      edges,
+      groups: calculatedGroups,
+      // Layered mode data
+      title,
+      subtitle,
+      layers: sortedLayers,
+      interLayerConnections,
+      layoutMode
+    };
   },
 
   flowchart: (text) => {
@@ -3853,10 +4037,40 @@ const Parsers = {
     const elements = [], relationships = [], boundaries = [];
     const boundaryStack = []; // Track nested boundaries
     let boundaryIndex = 0;
+    const layers = new Map(); // For layered mode: type -> elements
+    let layerOrder = 0;
+
+    // Parse title and subtitle
+    let title = null, subtitle = null;
+    const titleMatch = text.match(/^title:\s*(.+)$/im);
+    const subtitleMatch = text.match(/^subtitle:\s*(.+)$/im);
+    if (titleMatch) title = titleMatch[1].trim();
+    if (subtitleMatch) subtitle = subtitleMatch[1].trim();
+
+    // C4 layer colors by element type
+    const c4LayerColors = {
+      person: '#dbeafe',      // Light blue
+      user: '#dbeafe',
+      system: '#dcfce7',      // Light green
+      container: '#fef9c3',   // Light yellow
+      component: '#f3e8ff',   // Light purple
+      database: '#f3e8ff',
+      external: '#f1f5f9'     // Light gray
+    };
+    const c4BorderColors = {
+      person: '#93c5fd',
+      user: '#93c5fd',
+      system: '#86efac',
+      container: '#fde047',
+      component: '#d8b4fe',
+      database: '#d8b4fe',
+      external: '#cbd5e1'
+    };
 
     text.split('\n').forEach((line, i) => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
+      if (line.toLowerCase().startsWith('title:') || line.toLowerCase().startsWith('subtitle:')) return;
 
       // Parse boundary/group start: boundary "name" { or group "name" {
       const boundaryMatch = line.match(/^(?:boundary|group)\s+["']([^"']+)["']\s*\{?\s*$/i);
@@ -3878,20 +4092,78 @@ const Parsers = {
         return;
       }
 
-      // Parse element: [type] Name: Description
-      const elemMatch = line.match(/^\[(\w+)\]\s*(.+?)(?::\s*(.+))?$/);
+      // Parse element: [type] Name: Description OR [type] Name1, Name2, Name3 (layered style)
+      const elemMatch = line.match(/^\[(\w+)\]\s*(.+)$/);
       if (elemMatch) {
-        const elem = {
-          id: `c4-${i}`,
-          type: elemMatch[1].toLowerCase(),
-          label: elemMatch[2].trim(),
-          description: elemMatch[3]?.trim() || '',
-          boundary: boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].id : null
-        };
-        elements.push(elem);
-        // Add to current boundary if in one
-        if (boundaryStack.length > 0) {
-          boundaryStack[boundaryStack.length - 1].elements.push(elem.id);
+        const elemType = elemMatch[1].toLowerCase();
+        const restPart = elemMatch[2];
+
+        // Check if it's a comma-separated list (layered style) vs single element with description
+        const hasMultipleItems = restPart.includes(',') && !restPart.includes(':');
+
+        if (hasMultipleItems) {
+          // Layered style: [type] Name1, Name2, Name3
+          const items = restPart.split(',').map(s => s.trim()).filter(s => s);
+
+          // Create layer for this type if not exists
+          const layerId = `c4-layer-${elemType}-${layerOrder}`;
+          if (!layers.has(layerId)) {
+            layers.set(layerId, {
+              id: layerId,
+              type: elemType,
+              label: elemType.charAt(0).toUpperCase() + elemType.slice(1),
+              nodes: [],
+              color: c4LayerColors[elemType] || c4LayerColors.external,
+              borderColor: c4BorderColors[elemType] || c4BorderColors.external,
+              order: layerOrder++
+            });
+          }
+
+          items.forEach((item, idx) => {
+            const descMatch = item.match(/^([^:]+):\s*(.+)$/);
+            const label = descMatch ? descMatch[1].trim() : item;
+            const description = descMatch ? descMatch[2].trim() : '';
+
+            const elem = {
+              id: `c4-${i}-${idx}`,
+              type: elemType,
+              label,
+              description,
+              boundary: boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].id : null,
+              layerId
+            };
+            elements.push(elem);
+
+            // Add to layer
+            layers.get(layerId).nodes.push({
+              id: elem.id,
+              label,
+              description,
+              icon: elemType === 'person' ? '👤' : elemType === 'database' ? '🗄️' : '🏢',
+              color: c4BorderColors[elemType] || c4BorderColors.external
+            });
+
+            if (boundaryStack.length > 0) {
+              boundaryStack[boundaryStack.length - 1].elements.push(elem.id);
+            }
+          });
+        } else {
+          // Traditional style: [type] Name: Description
+          const descMatch = restPart.match(/^(.+?):\s*(.+)$/);
+          const label = descMatch ? descMatch[1].trim() : restPart.trim();
+          const description = descMatch ? descMatch[2].trim() : '';
+
+          const elem = {
+            id: `c4-${i}`,
+            type: elemType,
+            label,
+            description,
+            boundary: boundaryStack.length > 0 ? boundaryStack[boundaryStack.length - 1].id : null
+          };
+          elements.push(elem);
+          if (boundaryStack.length > 0) {
+            boundaryStack[boundaryStack.length - 1].elements.push(elem.id);
+          }
         }
         return;
       }
@@ -3900,7 +4172,33 @@ const Parsers = {
       const relMatch = line.match(/^(.+?)\s*->\s*(.+?)(?::\s*(.+))?$/);
       if (relMatch) relationships.push({ from: relMatch[1].trim(), to: relMatch[2].trim(), label: relMatch[3]?.trim() || '' });
     });
-    return { elements, relationships, boundaries };
+
+    // Determine layout mode
+    const hasRelationships = relationships.length > 0;
+    const hasLayers = layers.size > 0;
+    const layoutMode = (hasLayers && !hasRelationships) ? 'layered' : 'classic';
+
+    // Generate inter-layer connections for layered mode
+    const sortedLayers = Array.from(layers.values()).sort((a, b) => a.order - b.order);
+    const interLayerConnections = [];
+    for (let i = 0; i < sortedLayers.length - 1; i++) {
+      interLayerConnections.push({
+        fromLayer: sortedLayers[i].id,
+        toLayer: sortedLayers[i + 1].id,
+        label: ''
+      });
+    }
+
+    return {
+      elements,
+      relationships,
+      boundaries,
+      title,
+      subtitle,
+      layers: sortedLayers,
+      interLayerConnections,
+      layoutMode
+    };
   },
 
   requirement: (text) => {
@@ -4369,6 +4667,323 @@ function MindMapDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabel
   );
 }
 
+// ============================================
+// LAYERED ARCHITECTURE DIAGRAM
+// ============================================
+
+// Calculate layout for layered architecture diagram
+const calculateLayeredLayout = (layers, canvasWidth = 1000) => {
+  const LAYER_PADDING = 40;           // Padding inside layer container
+  const NODE_WIDTH = 140;             // Each node width
+  const NODE_HEIGHT = 70;             // Each node height
+  const NODE_GAP = 25;                // Gap between nodes horizontally
+  const LAYER_GAP = 30;               // Gap between layers (for arrow)
+  const LAYER_TITLE_HEIGHT = 35;      // Height for layer title
+  const TITLE_AREA_HEIGHT = 80;       // Height for main title/subtitle area
+  const MAX_NODES_PER_ROW = 5;        // Maximum nodes per row before wrapping
+
+  let currentY = TITLE_AREA_HEIGHT;
+  const layoutLayers = [];
+
+  layers.forEach((layer) => {
+    const nodeCount = layer.nodes.length;
+    const nodesPerRow = Math.min(nodeCount, MAX_NODES_PER_ROW);
+    const rowCount = Math.ceil(nodeCount / MAX_NODES_PER_ROW);
+
+    // Calculate layer container dimensions
+    const totalNodesWidth = nodesPerRow * NODE_WIDTH + (nodesPerRow - 1) * NODE_GAP;
+    const layerWidth = Math.max(totalNodesWidth + LAYER_PADDING * 2, 350);
+    const layerContentHeight = rowCount * NODE_HEIGHT + (rowCount - 1) * 15; // 15px row gap
+    const layerHeight = layerContentHeight + LAYER_PADDING * 2 + LAYER_TITLE_HEIGHT;
+
+    // Center layer horizontally in canvas
+    const layerX = (canvasWidth - layerWidth) / 2;
+    const layerY = currentY;
+
+    // Position nodes within layer (horizontally centered, wrap to multiple rows)
+    const positionedNodes = layer.nodes.map((node, nodeIdx) => {
+      const rowIdx = Math.floor(nodeIdx / MAX_NODES_PER_ROW);
+      const colIdx = nodeIdx % MAX_NODES_PER_ROW;
+      const nodesInThisRow = Math.min(MAX_NODES_PER_ROW, nodeCount - rowIdx * MAX_NODES_PER_ROW);
+      const rowWidth = nodesInThisRow * NODE_WIDTH + (nodesInThisRow - 1) * NODE_GAP;
+      const rowStartX = layerX + (layerWidth - rowWidth) / 2;
+
+      return {
+        ...node,
+        x: rowStartX + colIdx * (NODE_WIDTH + NODE_GAP) + NODE_WIDTH / 2,
+        y: layerY + LAYER_TITLE_HEIGHT + LAYER_PADDING + rowIdx * (NODE_HEIGHT + 15) + NODE_HEIGHT / 2,
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT
+      };
+    });
+
+    layoutLayers.push({
+      ...layer,
+      x: layerX,
+      y: layerY,
+      width: layerWidth,
+      height: layerHeight,
+      nodes: positionedNodes
+    });
+
+    currentY += layerHeight + LAYER_GAP;
+  });
+
+  return {
+    layers: layoutLayers,
+    totalHeight: currentY + 20,
+    totalWidth: canvasWidth
+  };
+};
+
+// Layered Architecture Diagram - Clean PlantUML/Mermaid style
+function LayeredArchitectureDiagram({ data, theme = THEMES.dark }) {
+  const canvas = useInteractiveCanvas({ x: 50, y: 30 });
+  const { title, subtitle, layers = [], interLayerConnections = [] } = data;
+
+  // Calculate layout
+  const layout = useMemo(() => {
+    return calculateLayeredLayout(layers);
+  }, [layers]);
+
+  // Content bounds for fit-to-view
+  const contentBounds = useMemo(() => {
+    if (!layout.layers.length) return { x: 0, y: 0, width: 800, height: 600 };
+    const allNodes = layout.layers.flatMap(l => l.nodes);
+    if (allNodes.length === 0) return { x: 0, y: 0, width: 800, height: 600 };
+
+    const minX = Math.min(...layout.layers.map(l => l.x)) - 50;
+    const maxX = Math.max(...layout.layers.map(l => l.x + l.width)) + 50;
+    const minY = 0;
+    const maxY = layout.totalHeight + 50;
+
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [layout]);
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      height: '100%',
+      overflow: 'hidden',
+      background: theme.canvasBg,
+      borderRadius: 12,
+      border: `1px solid ${theme.border}`
+    }}>
+      <div
+        ref={canvas.canvasRef}
+        className="canvas-bg"
+        onMouseDown={canvas.handleCanvasMouseDown}
+        onMouseMove={canvas.handleMouseMove}
+        onMouseUp={canvas.handleMouseUp}
+        onMouseLeave={canvas.handleMouseUp}
+        onWheel={canvas.handleWheel}
+        style={{
+          width: '100%',
+          height: '100%',
+          cursor: canvas.isPanning ? 'grabbing' : 'grab'
+        }}
+      >
+        {/* Grid background */}
+        <div
+          className="canvas-bg"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`,
+            backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`,
+            backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`,
+            pointerEvents: 'none'
+          }}
+        />
+
+        {/* SVG layer for connectors and layer containers */}
+        <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
+          <defs>
+            <marker id="layered-arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+              <path d="M 0 0 L 10 4 L 0 8 L 2.5 4 Z" fill={theme.textSecondary} />
+            </marker>
+          </defs>
+
+          <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
+            {/* Render layer containers */}
+            {layout.layers.map(layer => (
+              <g key={layer.id}>
+                <rect
+                  x={layer.x}
+                  y={layer.y}
+                  width={layer.width}
+                  height={layer.height}
+                  fill={layer.color}
+                  stroke={layer.borderColor}
+                  strokeWidth={2}
+                  strokeDasharray="8,4"
+                  rx={16}
+                  opacity={0.95}
+                />
+                <text
+                  x={layer.x + layer.width / 2}
+                  y={layer.y + 22}
+                  textAnchor="middle"
+                  fill={theme.textPrimary}
+                  fontSize="13"
+                  fontWeight="600"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                  opacity={0.85}
+                >
+                  {layer.label}
+                </text>
+              </g>
+            ))}
+
+            {/* Render inter-layer arrows */}
+            {interLayerConnections.map((conn, i) => {
+              const fromLayer = layout.layers.find(l => l.id === conn.fromLayer);
+              const toLayer = layout.layers.find(l => l.id === conn.toLayer);
+              if (!fromLayer || !toLayer) return null;
+
+              const x = fromLayer.x + fromLayer.width / 2;
+              const y1 = fromLayer.y + fromLayer.height + 2;
+              const y2 = toLayer.y - 2;
+              const midY = (y1 + y2) / 2;
+
+              return (
+                <g key={`conn-${i}`}>
+                  {/* Simple vertical arrow */}
+                  <path
+                    d={`M ${x} ${y1} L ${x} ${y2 - 8}`}
+                    fill="none"
+                    stroke={theme.textSecondary}
+                    strokeWidth={2}
+                    markerEnd="url(#layered-arrow)"
+                    opacity={0.5}
+                  />
+                  {/* Optional label */}
+                  {conn.label && (
+                    <text
+                      x={x + 15}
+                      y={midY}
+                      fill={theme.textSecondary}
+                      fontSize="10"
+                      fontFamily="system-ui"
+                    >
+                      {conn.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        {/* HTML layer for title and nodes */}
+        <div style={{
+          position: 'absolute',
+          transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`,
+          transformOrigin: '0 0',
+          pointerEvents: 'none'
+        }}>
+          {/* Title and subtitle */}
+          {(title || subtitle) && (
+            <div style={{
+              position: 'absolute',
+              top: 15,
+              left: 0,
+              right: 0,
+              textAlign: 'center',
+              width: layout.totalWidth
+            }}>
+              {title && (
+                <h2 style={{
+                  margin: 0,
+                  fontSize: '1.3rem',
+                  fontWeight: 700,
+                  color: theme.textPrimary,
+                  fontFamily: 'system-ui, -apple-system, sans-serif'
+                }}>
+                  {title}
+                </h2>
+              )}
+              {subtitle && (
+                <p style={{
+                  margin: '4px 0 0',
+                  fontSize: '0.85rem',
+                  color: theme.textSecondary,
+                  fontFamily: 'system-ui, -apple-system, sans-serif'
+                }}>
+                  {subtitle}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Render nodes inside layers */}
+          {layout.layers.flatMap(layer =>
+            layer.nodes.map(node => (
+              <div
+                key={node.id}
+                style={{
+                  position: 'absolute',
+                  left: node.x - node.width / 2,
+                  top: node.y - node.height / 2,
+                  width: node.width,
+                  height: node.height,
+                  background: 'white',
+                  border: `2px solid ${node.color || '#e2e8f0'}`,
+                  borderRadius: 10,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                  pointerEvents: 'auto',
+                  cursor: 'default'
+                }}
+              >
+                <span style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: '#1e293b',
+                  textAlign: 'center',
+                  padding: '0 8px',
+                  fontFamily: 'system-ui, -apple-system, sans-serif'
+                }}>
+                  {node.label}
+                </span>
+                {node.description && (
+                  <span style={{
+                    fontSize: '0.65rem',
+                    color: '#64748b',
+                    textAlign: 'center',
+                    padding: '0 6px',
+                    marginTop: 2,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'system-ui, -apple-system, sans-serif'
+                  }}>
+                    {node.description}
+                  </span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Canvas controls */}
+      <CanvasControls
+        onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))}
+        onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))}
+        onFit={() => canvas.fitToView(contentBounds)}
+        onReset={canvas.resetView}
+        zoom={canvas.zoom}
+      />
+    </div>
+  );
+}
+
 // Architecture with draggable nodes
 function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 0, y: 30 });
@@ -4461,90 +5076,90 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
     }
   }, [canvas, nodes, onLabelChange]);
 
-  // Auto-layout: Re-apply dagre layout to arrange nodes
+  // Auto-layout: Clean layered layout with proper group separation
   const applyAutoLayout = useCallback(() => {
     if (!nodes || nodes.length === 0) return;
 
-    // Create dagre compound graph to handle groups
-    const g = new dagre.graphlib.Graph({ compound: true });
-    g.setGraph({
-      rankdir: 'TB',
-      nodesep: 60,
-      ranksep: 60,
-      marginx: 60,
-      marginy: 50,
-      ranker: 'network-simplex'
-    });
-    g.setDefaultEdgeLabel(() => ({}));
+    // Layout constants
+    const NODE_W = 150, NODE_H = 100;
+    const NODE_GAP_X = 40, NODE_GAP_Y = 30;
+    const GROUP_PADDING = 40;
+    const GROUP_GAP = 60;
+    const START_X = 100, START_Y = 100;
+    const MAX_COLS = 4;
 
-    // Add group nodes first (as parent containers)
-    groups.forEach((group) => {
-      g.setNode(group.id, {
-        label: group.name,
-        clusterLabelPos: 'top',
-        style: 'fill: transparent'
-      });
-    });
+    // Separate nodes by group membership
+    const groupedNodes = new Map(); // group name -> nodes
+    const ungroupedNodes = [];
 
-    // Add nodes to dagre with parent group
-    nodes.forEach((node) => {
-      g.setNode(node.id, {
-        label: node.label,
-        width: node.width || DEFAULT_NODE_WIDTH,
-        height: DEFAULT_NODE_HEIGHT
-      });
-      // If node belongs to a group, set parent relationship
+    nodes.forEach(node => {
       if (node.group) {
-        const groupId = `group-${node.group.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-        if (groups.find(gr => gr.id === groupId)) {
-          g.setParent(node.id, groupId);
-        }
+        if (!groupedNodes.has(node.group)) groupedNodes.set(node.group, []);
+        groupedNodes.get(node.group).push(node);
+      } else {
+        ungroupedNodes.push(node);
       }
     });
 
-    // Add edges to dagre
-    edges.forEach((edge) => {
-      if (nodes.find(n => n.id === edge.source) && nodes.find(n => n.id === edge.target)) {
-        g.setEdge(edge.source, edge.target);
-      }
-    });
-
-    // Run dagre layout
-    dagre.layout(g);
-
-    // Apply computed positions to nodes
     const newPositions = {};
-    g.nodes().forEach((nodeId) => {
-      const dagreNode = g.node(nodeId);
-      // Only set positions for actual nodes, not groups
-      if (dagreNode && nodes.find(n => n.id === nodeId)) {
-        newPositions[nodeId] = { x: dagreNode.x, y: dagreNode.y };
-      }
-    });
-
-    // Update group positions based on their member nodes
     const groupPositions = {};
-    groups.forEach((group) => {
-      const memberNodes = nodes.filter(n => {
-        const groupId = n.group ? `group-${n.group.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : null;
-        return groupId === group.id;
+    let currentY = START_Y;
+
+    // Position ungrouped nodes first (persons, externals) - centered at top
+    if (ungroupedNodes.length > 0) {
+      const cols = Math.min(MAX_COLS, ungroupedNodes.length);
+      const rows = Math.ceil(ungroupedNodes.length / cols);
+      const totalWidth = cols * NODE_W + (cols - 1) * NODE_GAP_X;
+      const startX = START_X + 200; // Center offset
+
+      ungroupedNodes.forEach((node, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        newPositions[node.id] = {
+          x: startX + col * (NODE_W + NODE_GAP_X) + NODE_W / 2 - totalWidth / 2,
+          y: currentY + row * (NODE_H + NODE_GAP_Y) + NODE_H / 2
+        };
+      });
+      const rowCount = Math.ceil(ungroupedNodes.length / cols);
+      currentY += rowCount * (NODE_H + NODE_GAP_Y) + GROUP_GAP;
+    }
+
+    // Position each group's nodes in a horizontal grid
+    groups.forEach((group, groupIndex) => {
+      const groupNodes = groupedNodes.get(group.name) || [];
+      if (groupNodes.length === 0) return;
+
+      // Calculate grid dimensions
+      const cols = Math.min(MAX_COLS, groupNodes.length);
+      const rows = Math.ceil(groupNodes.length / cols);
+      const contentWidth = cols * NODE_W + (cols - 1) * NODE_GAP_X;
+      const contentHeight = rows * NODE_H + (rows - 1) * NODE_GAP_Y;
+
+      const groupStartX = START_X;
+      const groupStartY = currentY;
+
+      // Position nodes within the group
+      groupNodes.forEach((node, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        newPositions[node.id] = {
+          x: groupStartX + GROUP_PADDING + col * (NODE_W + NODE_GAP_X) + NODE_W / 2,
+          y: groupStartY + GROUP_PADDING + 30 + row * (NODE_H + NODE_GAP_Y) + NODE_H / 2
+        };
       });
 
-      if (memberNodes.length > 0) {
-        const positions = memberNodes.map(n => newPositions[n.id] || { x: n.x, y: n.y });
-        const padding = 40;
-        const minX = Math.min(...positions.map(p => p.x)) - DEFAULT_NODE_WIDTH / 2 - padding;
-        const maxX = Math.max(...positions.map(p => p.x)) + DEFAULT_NODE_WIDTH / 2 + padding;
-        const minY = Math.min(...positions.map(p => p.y)) - DEFAULT_NODE_HEIGHT / 2 - padding - 20;
-        const maxY = Math.max(...positions.map(p => p.y)) + DEFAULT_NODE_HEIGHT / 2 + padding;
+      // Calculate group boundary
+      groupPositions[group.id] = {
+        x: groupStartX,
+        y: groupStartY,
+        width: contentWidth + GROUP_PADDING * 2,
+        height: contentHeight + GROUP_PADDING * 2 + 30, // +30 for label
+        color: group.color,
+        borderColor: group.borderColor
+      };
 
-        groupPositions[group.id] = {
-          x: minX,
-          y: minY,
-          width: maxX - minX,
-          height: maxY - minY
-        };
-      }
+      // Move to next row for next group
+      currentY += contentHeight + GROUP_PADDING * 2 + 30 + GROUP_GAP;
     });
 
     canvas.setPositions(newPositions);
@@ -4586,6 +5201,19 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
       if (nodeIds.length > 0) canvas.setSelectedNodes(new Set(nodeIds));
     }
   }, [canvas.isSelecting, canvas.selectionBox, nodes, canvas]);
+
+  // Auto-layout disabled on mount - parser layout provides cleaner separation
+  // Users can manually trigger layout via the Layout button if needed
+  // const hasAppliedInitialLayout = useRef(false);
+  // useEffect(() => {
+  //   if (!hasAppliedInitialLayout.current && nodes && nodes.length > 0) {
+  //     hasAppliedInitialLayout.current = true;
+  //     const timer = setTimeout(() => {
+  //       applyAutoLayout();
+  //     }, 100);
+  //     return () => clearTimeout(timer);
+  //   }
+  // }, [nodes, applyAutoLayout]);
 
   // Click on canvas to clear selection
   const handleCanvasClick = useCallback((e) => {
@@ -4673,7 +5301,7 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
                   )}
                   {e.label && (
                     <>
-                      <rect x={midX - Math.max(e.label.length * 4, 40)} y={midY - 10} width={Math.max(e.label.length * 8, 80)} height={20} rx={4} fill="rgba(15,23,42,0.9)" stroke={COLORS.purple} strokeWidth={1} opacity={0.9} />
+                      <rect x={midX - Math.max(e.label.length * 4, 40)} y={midY - 10} width={Math.max(e.label.length * 8, 80)} height={20} rx={4} fill={theme.cardBg} stroke={COLORS.purple} strokeWidth={1} opacity={0.95} />
                       <text x={midX} y={midY + 4} textAnchor="middle" fill={theme.textPrimary} fontSize="10" fontFamily="system-ui" fontWeight="500">{e.label}</text>
                     </>
                   )}
@@ -4701,9 +5329,17 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
             const isSelected = canvas.selectedNodes.has(node.id);
             const isEditing = canvas.editingNode === node.id;
             const hasDescription = node.description && node.description.length > 0;
-            let style = { position: 'absolute', left: pos.x - 65, top: pos.y - 37, width: 130, height: hasDescription ? 90 : 75, background: getNodeGradient(nodeColor, sketchMode), border: sketchMode ? `2px solid ${SKETCH_COLORS.stroke}` : `2px solid ${nodeColor}`, borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: getNodeShadow(nodeColor, isDragging, isSelected, sketchMode), transition: isDragging ? 'none' : 'box-shadow 0.2s', fontFamily: getSketchFont(sketchMode) };
-            if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = hasDescription ? 100 : 85; }
-            if (shape === 'hexagon') { style.clipPath = 'polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%)'; style.width = 145; }
+            const hasGroup = node.groupColorIndex >= 0;
+            // Use solid fill for nodes in groups (C4 style), gradient for others
+            const bgStyle = hasGroup
+              ? nodeColor  // Solid color for grouped nodes
+              : getNodeGradient(nodeColor, sketchMode);
+            let style = { position: 'absolute', left: pos.x - 75, top: pos.y - 45, width: 150, height: hasDescription ? 100 : 90, background: bgStyle, border: isSelected ? `2px solid ${COLORS.blue}` : (hasGroup ? 'none' : `2px solid ${nodeColor}`), borderRadius: shape === 'person' ? '50% 50% 8px 8px' : 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 3px ${COLORS.blue}40` : (hasGroup ? '0 2px 4px rgba(0,0,0,0.2)' : getNodeShadow(nodeColor, isDragging, isSelected, sketchMode)), transition: isDragging ? 'none' : 'box-shadow 0.2s', fontFamily: getSketchFont(sketchMode), padding: '8px 10px', boxSizing: 'border-box' };
+            if (shape === 'cylinder') { style.borderRadius = '50% / 15%'; style.height = hasDescription ? 105 : 95; }
+            if (shape === 'hexagon') { style.clipPath = 'polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%)'; style.width = 155; }
+            // Text color: white for grouped nodes (solid bg), theme color for others
+            const textColor = hasGroup ? '#fff' : (sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary);
+            const secondaryColor = hasGroup ? 'rgba(255,255,255,0.8)' : theme.textSecondary;
             return (
               <div
                 key={node.id}
@@ -4713,17 +5349,22 @@ function ArchitectureDiagram({ data, theme = THEMES.dark, sketchMode = false, on
                 style={style}
                 title={node.description || ''}
               >
-                <div style={{ fontSize: '1.5rem', marginBottom: 2 }}>{canvas.nodeIcons[node.id] || node.icon}</div>
+                {/* Type label for grouped nodes (C4 style) */}
+                {hasGroup && node.typeLabel && (
+                  <div style={{ fontSize: '0.6rem', fontWeight: 500, color: 'rgba(255,255,255,0.85)', marginBottom: 4 }}>[{node.typeLabel}]</div>
+                )}
+                {/* Icon for non-grouped nodes */}
+                {!hasGroup && <div style={{ fontSize: '1.4rem', marginBottom: 2 }}>{canvas.nodeIcons[node.id] || node.icon}</div>}
                 <EditableNodeLabel
                   isEditing={isEditing}
                   value={isEditing ? canvas.editValue : node.label}
                   onChange={canvas.setEditValue}
                   onFinish={handleLabelEditFinish}
                   onCancel={canvas.cancelEditing}
-                  style={{ fontSize: sketchMode ? '1rem' : '0.8rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }}
+                  style={{ fontSize: hasGroup ? '0.85rem' : (sketchMode ? '1rem' : '0.8rem'), fontWeight: 600, color: textColor, textAlign: 'center' }}
                 />
                 {hasDescription && (
-                  <div style={{ fontSize: '0.65rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 2, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: '0.65rem', color: secondaryColor, textAlign: 'center', padding: '0 8px', marginTop: 4, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.2 }}>
                     {node.description}
                   </div>
                 )}
@@ -4897,8 +5538,8 @@ function UserJourneyDiagram({ data, theme = THEMES.dark, sketchMode = false, onL
                   {/* Label */}
                   {edge.label && (
                     <g>
-                      <rect x={midX - labelWidth / 2} y={ctrlY - 10} width={labelWidth} height={20} rx={10} fill="rgba(15, 23, 42, 0.9)" stroke="rgba(124,58,237,0.5)" strokeWidth={1} />
-                      <text x={midX} y={ctrlY + 4} textAnchor="middle" fill="#e0e0e0" fontSize={10} fontWeight="500" fontFamily="system-ui, sans-serif">{edge.label}</text>
+                      <rect x={midX - labelWidth / 2} y={ctrlY - 10} width={labelWidth} height={20} rx={10} fill={theme.cardBg} stroke="rgba(124,58,237,0.5)" strokeWidth={1} />
+                      <text x={midX} y={ctrlY + 4} textAnchor="middle" fill={theme.textPrimary} fontSize={10} fontWeight="500" fontFamily="system-ui, sans-serif">{edge.label}</text>
                     </g>
                   )}
                 </g>
@@ -8674,19 +9315,44 @@ function ComponentDiagram({ data, theme = THEMES.dark, sketchMode = false, onLab
 // C4 Diagram with relationships
 function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChange, onDeleteNodes, onPasteNodes }) {
   const canvas = useInteractiveCanvas({ x: 50, y: 50 });
-  const { elements = [], relationships = [], boundaries = [] } = data;
+  const { elements = [], relationships = [], boundaries = [], title = null, subtitle = null } = data;
 
-  const typeStyles = {
-    person: { color: COLORS.blue, icon: '👤', shape: 'person' },
-    system: { color: COLORS.cyan, icon: '🏢', shape: 'rect' },
-    container: { color: COLORS.green, icon: '📦', shape: 'rect' },
-    component: { color: COLORS.purple, icon: '⚙️', shape: 'rect' },
-    database: { color: COLORS.emerald, icon: '🗄️', shape: 'cylinder' },
-    external: { color: COLORS.slate, icon: '🌐', shape: 'rect' },
-    default: { color: COLORS.cyan, icon: '🏗️', shape: 'rect' }
+  // C4 Layer color palette - distinct colors for each layer
+  const LAYER_COLORS = [
+    { bg: '#1168BD', border: '#0D5BA8' },   // Blue
+    { bg: '#2D882D', border: '#236B23' },   // Green
+    { bg: '#7B4B94', border: '#5E3A72' },   // Purple
+    { bg: '#D4652F', border: '#B85525' },   // Orange
+    { bg: '#C73E1D', border: '#A33318' },   // Red
+    { bg: '#1A9988', border: '#157A6C' },   // Teal
+  ];
+
+  // Special colors only for person and external (not in boundaries)
+  const TYPE_COLORS = {
+    person: { color: '#08427B', label: 'Person', shape: 'person' },
+    external: { color: '#999999', label: 'External System', shape: 'rect' },
   };
 
-  const boundaryColors = [COLORS.purple, COLORS.blue, COLORS.cyan, COLORS.emerald, COLORS.amber, COLORS.pink];
+  const getTypeStyle = (type, boundaryIndex = -1) => {
+    // Person and external always use their specific colors (only when not in a boundary)
+    if (boundaryIndex < 0 && TYPE_COLORS[type]) return TYPE_COLORS[type];
+
+    // For elements in boundaries, use layer color
+    if (boundaryIndex >= 0) {
+      const layerColor = LAYER_COLORS[boundaryIndex % LAYER_COLORS.length];
+      const label = type.charAt(0).toUpperCase() + type.slice(1);
+      return { color: layerColor.bg, label, shape: type === 'database' ? 'cylinder' : 'rect' };
+    }
+
+    // Default for unbounded elements
+    return { color: '#1168BD', label: type.charAt(0).toUpperCase() + type.slice(1), shape: 'rect' };
+  };
+
+  // Boundary border colors matching layer colors
+  const boundaryBorderColors = LAYER_COLORS.map(c => c.border);
+
+  // State for boundary positions (updated by auto-layout)
+  const [layoutBoundaryPositions, setLayoutBoundaryPositions] = useState({});
 
   const layout = useMemo(() => {
     // Group elements by boundary
@@ -8703,70 +9369,92 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
     });
 
     const positioned = [];
-    let currentY = 120;
-    const padding = 40;
-    const nodeWidth = 170;
-    const nodeHeight = 120;
-    const nodeSpacingX = 220;
-    const nodeSpacingY = 160;
+    // Layout constants - larger nodes for proper C4 text hierarchy
+    const titleOffset = (title || subtitle) ? 80 : 0;
+    const NODE_WIDTH = 160;
+    const NODE_HEIGHT = 100;
+    const NODE_GAP_X = 40;
+    const NODE_GAP_Y = 40;
+    const BOUNDARY_PADDING = 30;
+    const BOUNDARY_GAP = 50;
+    const MAX_COLS = 3;
+    const START_X = 100;
 
-    // Position unbounded elements first at top
+    let currentY = 100 + titleOffset;
+
+    // Position unbounded elements (persons/actors) centered at top
     if (unboundedElements.length > 0) {
-      const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(unboundedElements.length))));
+      const totalWidth = unboundedElements.length * NODE_WIDTH + (unboundedElements.length - 1) * NODE_GAP_X;
+      const centerX = START_X + 300; // Center point
+      const startX = centerX - totalWidth / 2 + NODE_WIDTH / 2;
+
       unboundedElements.forEach((el, i) => {
         positioned.push({
           ...el,
           id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
-          defaultX: 150 + (i % cols) * nodeSpacingX,
-          defaultY: currentY + Math.floor(i / cols) * nodeSpacingY,
-          style: typeStyles[el.type] || typeStyles.default
+          defaultX: startX + i * (NODE_WIDTH + NODE_GAP_X),
+          defaultY: currentY + NODE_HEIGHT / 2,
+          style: getTypeStyle(el.type, -1)
         });
       });
-      const rows = Math.ceil(unboundedElements.length / Math.min(4, Math.max(2, Math.ceil(Math.sqrt(unboundedElements.length)))));
-      currentY += rows * nodeSpacingY + padding;
+      currentY += NODE_HEIGHT + BOUNDARY_GAP;
     }
 
-    // Position elements within each boundary
+    // Position elements within each boundary - GRID arrangement
     boundaries.forEach((boundary, bi) => {
       const boundaryEls = boundaryElements.get(boundary.id) || [];
       if (boundaryEls.length === 0) return;
 
-      const cols = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(boundaryEls.length))));
+      // Calculate grid: up to MAX_COLS columns
+      const cols = Math.min(MAX_COLS, boundaryEls.length);
+      const rows = Math.ceil(boundaryEls.length / cols);
+
+      const boundaryStartY = currentY + BOUNDARY_PADDING + 35;
+      const startX = START_X + BOUNDARY_PADDING + 20;
+
       boundaryEls.forEach((el, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
         positioned.push({
           ...el,
           id: el.label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
-          defaultX: 150 + padding + (i % cols) * nodeSpacingX,
-          defaultY: currentY + padding + 30 + Math.floor(i / cols) * nodeSpacingY,
-          style: typeStyles[el.type] || typeStyles.default,
-          boundaryId: boundary.id
+          defaultX: startX + col * (NODE_WIDTH + NODE_GAP_X) + NODE_WIDTH / 2,
+          defaultY: boundaryStartY + row * (NODE_HEIGHT + NODE_GAP_Y) + NODE_HEIGHT / 2,
+          style: getTypeStyle(el.type, bi),
+          boundaryId: boundary.id,
+          boundaryIndex: bi
         });
       });
-      const rows = Math.ceil(boundaryEls.length / cols);
-      currentY += rows * nodeSpacingY + padding * 2 + 40;
+
+      // Move to next boundary - account for multiple rows
+      const boundaryHeight = rows * NODE_HEIGHT + (rows - 1) * NODE_GAP_Y;
+      currentY += boundaryHeight + BOUNDARY_PADDING * 2 + 40 + BOUNDARY_GAP;
     });
 
     return positioned;
-  }, [elements, boundaries]);
+  }, [elements, boundaries, title, subtitle]);
 
   // Calculate boundary rectangles
   const boundaryRects = useMemo(() => {
+    const NODE_WIDTH = 160;
+    const NODE_HEIGHT = 100;
+    const PADDING = 25;
+
     return boundaries.map((boundary, i) => {
       const boundaryNodes = layout.filter(el => el.boundaryId === boundary.id);
       if (boundaryNodes.length === 0) return null;
 
       const xs = boundaryNodes.map(n => n.defaultX);
       const ys = boundaryNodes.map(n => n.defaultY);
-      const padding = 30;
 
       return {
         id: boundary.id,
         name: boundary.name,
-        x: Math.min(...xs) - 85 - padding,
-        y: Math.min(...ys) - 60 - padding - 25,
-        width: Math.max(...xs) - Math.min(...xs) + 170 + padding * 2,
-        height: Math.max(...ys) - Math.min(...ys) + 120 + padding * 2 + 25,
-        color: boundaryColors[i % boundaryColors.length]
+        x: Math.min(...xs) - NODE_WIDTH / 2 - PADDING,
+        y: Math.min(...ys) - NODE_HEIGHT / 2 - PADDING - 25,
+        width: Math.max(...xs) - Math.min(...xs) + NODE_WIDTH + PADDING * 2,
+        height: Math.max(...ys) - Math.min(...ys) + NODE_HEIGHT + PADDING * 2 + 25,
+        color: boundaryBorderColors[i % boundaryBorderColors.length]
       };
     }).filter(Boolean);
   }, [boundaries, layout]);
@@ -8783,6 +9471,33 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
       }
     }
   }, [canvas, layout, onLabelChange]);
+
+  // Reset to clean layered layout
+  const applyAutoLayout = useCallback(() => {
+    if (!layout || layout.length === 0) return;
+
+    // Reset all nodes to their default clean positions
+    const newPositions = {};
+    layout.forEach((el) => {
+      newPositions[el.id] = { x: el.defaultX, y: el.defaultY };
+    });
+
+    // Reset boundary positions to match defaults
+    setLayoutBoundaryPositions({});
+    canvas.setPositions(newPositions);
+  }, [layout, canvas]);
+
+  // Auto-layout on mount
+  const hasAppliedInitialLayout = useRef(false);
+  useEffect(() => {
+    if (!hasAppliedInitialLayout.current && layout && layout.length > 0) {
+      hasAppliedInitialLayout.current = true;
+      const timer = setTimeout(() => {
+        applyAutoLayout();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [layout, applyAutoLayout]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -8842,9 +9557,9 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
         <div className="canvas-bg" style={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(${theme.gridColor} 1px, transparent 1px), linear-gradient(90deg, ${theme.gridColor} 1px, transparent 1px)`, backgroundSize: `${25 * canvas.zoom}px ${25 * canvas.zoom}px`, backgroundPosition: `${canvas.pan.x}px ${canvas.pan.y}px`, pointerEvents: 'none' }} />
         <svg width="100%" height="100%" style={{ position: 'absolute', overflow: 'visible', pointerEvents: 'none' }}>
           <defs>
-            {/* C4 diagram arrow - sharp arrowhead */}
+            {/* C4 diagram arrow - gray arrowhead */}
             <marker id="c4-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill={COLORS.cyan} />
+              <path d="M 0 0 L 8 3 L 0 6 L 2 3 Z" fill="#707070" />
             </marker>
           </defs>
           <g transform={`translate(${canvas.pan.x}, ${canvas.pan.y}) scale(${canvas.zoom})`}>
@@ -8854,16 +9569,20 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
               if (!src || !tgt) return null;
               const sp = getPos(src), tp = getPos(tgt);
               const dx = tp.x - sp.x, dy = tp.y - sp.y, dist = Math.sqrt(dx * dx + dy * dy) || 1;
-              const midX = (sp.x + tp.x) / 2, midY = (sp.y + tp.y) / 2;
-              const perpX = -dy / dist * 25, perpY = dx / dist * 25;
-              const path = `M ${sp.x + (dx/dist)*85} ${sp.y + (dy/dist)*60} Q ${midX + perpX} ${midY + perpY} ${tp.x - (dx/dist)*85} ${tp.y - (dy/dist)*60}`;
+              const NODE_W = 80, NODE_H = 50; // Half of 160x100
+              // Straight line for cleaner C4 style
+              const startX = sp.x + (dx/dist) * NODE_W;
+              const startY = sp.y + (dy/dist) * NODE_H;
+              const endX = tp.x - (dx/dist) * NODE_W;
+              const endY = tp.y - (dy/dist) * NODE_H;
+              const midX = (startX + endX) / 2, midY = (startY + endY) / 2;
               return (
                 <g key={i}>
-                  <path d={path} fill="none" stroke={COLORS.cyan} strokeWidth={2.5} markerEnd="url(#c4-arrow)" opacity={0.95} />
+                  <line x1={startX} y1={startY} x2={endX} y2={endY} stroke="#707070" strokeWidth={1.5} markerEnd="url(#c4-arrow)" />
                   {rel.label && (
                     <g>
-                      <rect x={midX + perpX - rel.label.length * 3.5 - 6} y={midY + perpY - 18} width={rel.label.length * 7 + 12} height={16} rx={4} fill="rgba(0,0,0,0.8)" />
-                      <text x={midX + perpX} y={midY + perpY - 7} textAnchor="middle" fill={COLORS.cyan} fontSize={10}>{rel.label}</text>
+                      <rect x={midX - rel.label.length * 3 - 6} y={midY - 10} width={rel.label.length * 6 + 12} height={16} rx={2} fill="white" stroke="#707070" strokeWidth={1} />
+                      <text x={midX} y={midY + 2} textAnchor="middle" fill="#333" fontSize={9} fontWeight="500">{rel.label}</text>
                     </g>
                   )}
                 </g>
@@ -8876,27 +9595,45 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
           </g>
         </svg>
         <div style={{ position: 'absolute', transform: `translate(${canvas.pan.x}px, ${canvas.pan.y}px) scale(${canvas.zoom})`, transformOrigin: '0 0' }}>
-          {/* Render boundary rectangles first (behind nodes) */}
-          {boundaryRects.map(boundary => (
-            <div key={boundary.id} style={{ position: 'absolute', left: boundary.x, top: boundary.y, width: boundary.width, height: boundary.height, background: `${boundary.color}08`, border: `2px dashed ${boundary.color}50`, borderRadius: 16, pointerEvents: 'none' }}>
-              <div style={{ position: 'absolute', top: 8, left: 12, fontSize: '0.75rem', fontWeight: 600, color: boundary.color, textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.8 }}>{boundary.name}</div>
+          {/* Render title and subtitle */}
+          {(title || subtitle) && (
+            <div style={{ position: 'absolute', left: 100, top: 20, textAlign: 'left' }}>
+              {title && <div style={{ fontSize: '1.3rem', fontWeight: 700, color: theme.textPrimary, marginBottom: 4 }}>{title}</div>}
+              {subtitle && <div style={{ fontSize: '0.85rem', fontWeight: 400, color: theme.textSecondary }}>{subtitle}</div>}
             </div>
-          ))}
-          {/* Render nodes */}
+          )}
+          {/* Render boundary rectangles first (behind nodes) */}
+          {boundaries.map((boundary, i) => {
+            // Use layout-computed positions if available, otherwise use boundaryRects
+            const pos = layoutBoundaryPositions[boundary.id] || boundaryRects.find(b => b.id === boundary.id);
+            if (!pos) return null;
+            const layerColor = LAYER_COLORS[i % LAYER_COLORS.length];
+            return (
+              <div key={boundary.id} style={{ position: 'absolute', left: pos.x, top: pos.y, width: pos.width, height: pos.height, background: `${layerColor.bg}10`, border: `2px dashed ${layerColor.bg}`, borderRadius: 8, pointerEvents: 'none' }}>
+                <div style={{ position: 'absolute', top: 8, left: 12, fontSize: '0.8rem', fontWeight: 600, color: layerColor.bg, letterSpacing: '0.2px' }}>{boundary.name}</div>
+              </div>
+            );
+          })}
+          {/* Render nodes - C4 style solid colored boxes */}
           {layout.map(el => {
             const pos = getPos(el);
             const isDragging = canvas.dragging === el.id;
             const isSelected = canvas.selectedNodes.has(el.id);
             const isPerson = el.style.shape === 'person';
+            const NODE_W = 160, NODE_H = 100;
+            const bgColor = el.style.color;
             return (
-              <div key={el.id} onClick={(e) => canvas.handleNodeClick(e, el.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, el.id, el.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, el.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - 85, top: pos.y - 60, width: 170, height: 120, background: `${el.style.color}15`, border: `2px solid ${isSelected ? COLORS.blue : el.style.color}`, borderRadius: isPerson ? '50% 50% 12px 12px' : el.style.shape === 'cylinder' ? '50% / 15%' : 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 2px ${COLORS.blue}, 0 0 20px ${COLORS.blue}40` : isDragging ? `0 0 30px ${el.style.color}50` : `0 4px 20px ${el.style.color}20`, transition: isDragging ? 'none' : 'box-shadow 0.2s', touchAction: 'none' }}>
-                <div style={{ fontSize: '2rem', marginBottom: 6 }}>{el.style.icon}</div>
+              <div key={el.id} onClick={(e) => canvas.handleNodeClick(e, el.id)} onDoubleClick={(e) => canvas.handleNodeDoubleClick(e, el.id, el.label)} onContextMenu={(e) => canvas.handleNodeContextMenu(e, el.id)} onMouseDown={(e) => canvas.handleNodeMouseDown(e, el.id, pos.x, pos.y)} onTouchStart={(e) => canvas.handleNodeTouchStart(e, el.id, pos.x, pos.y)} style={{ position: 'absolute', left: pos.x - NODE_W / 2, top: pos.y - NODE_H / 2, width: NODE_W, height: NODE_H, background: bgColor, border: isSelected ? `2px solid ${COLORS.blue}` : 'none', borderRadius: isPerson ? '50% 50% 8px 8px' : 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: isDragging ? 'grabbing' : 'grab', boxShadow: isSelected ? `0 0 0 3px ${COLORS.blue}40` : '0 2px 4px rgba(0,0,0,0.2)', transition: isDragging ? 'none' : 'box-shadow 0.15s', touchAction: 'none', padding: '8px 12px', boxSizing: 'border-box' }}>
+                {/* Type label - small, at top */}
+                <div style={{ fontSize: '0.6rem', fontWeight: 500, color: 'rgba(255,255,255,0.85)', textAlign: 'center', marginBottom: 4 }}>[{el.style.label}]</div>
+                {/* Name - larger, bold */}
                 {canvas.editingNode === el.id ? (
-                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }} />
+                  <EditableNodeLabel value={canvas.editingValue} onChange={(v) => canvas.setEditingValue(v)} onFinish={handleLabelEditFinish} style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff', textAlign: 'center' }} />
                 ) : (
-                  <div style={{ fontSize: sketchMode ? '1rem' : '0.9rem', fontWeight: 600, color: sketchMode ? SKETCH_COLORS.stroke : theme.textPrimary, textAlign: 'center' }}>{el.label}</div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}>{el.label}</div>
                 )}
-                {el.description && <div style={{ fontSize: '0.7rem', color: theme.textSecondary, textAlign: 'center', padding: '0 8px', marginTop: 4 }}>{el.description}</div>}
+                {/* Description/technology - smaller */}
+                {el.description && <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.8)', textAlign: 'center', marginTop: 4, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{el.description}</div>}
               </div>
             );
           })}
@@ -8916,7 +9653,7 @@ function C4Diagram({ data, theme = THEMES.dark, sketchMode = false, onLabelChang
           {canvas.clipboard.length} node{canvas.clipboard.length > 1 ? 's' : ''} copied
         </div>
       )}
-      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} zoom={canvas.zoom} />
+      <CanvasControls onZoomIn={() => canvas.setZoom(z => Math.min(z * 1.2, 2.5))} onZoomOut={() => canvas.setZoom(z => Math.max(z * 0.8, 0.3))} onFit={() => canvas.fitToView(contentBounds)} onReset={canvas.resetView} onLayout={applyAutoLayout} zoom={canvas.zoom} />
       {/* Context menu */}
       {canvas.contextMenu && <ColorPickerMenu position={canvas.contextMenu} onClose={() => canvas.closeContextMenu()} nodeId={canvas.contextMenu.nodeId} />}
     </div>
@@ -9857,7 +10594,12 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMod
   switch (type) {
     case 'mindmap': case 'wbs': return <MindMapDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'erd': return <ERDDiagram tables={Array.isArray(parsed) ? parsed : []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'architecture': return <ArchitectureDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'architecture':
+      // Use layered layout if no node-to-node edges exist
+      if (parsed.layoutMode === 'layered') {
+        return <LayeredArchitectureDiagram data={parsed} theme={t} />;
+      }
+      return <ArchitectureDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'flowchart': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'state': return <FlowDiagram nodes={parsed.states || []} edges={parsed.transitions?.map((tr, i) => ({ id: `t-${i}`, source: tr.from, target: tr.to, label: tr.event })) || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
     case 'activity': return <FlowDiagram nodes={parsed.nodes || []} edges={parsed.edges || []} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} onEdgeLabelChange={onEdgeLabelChange} onCreateConnection={onCreateConnection} />;
@@ -9875,7 +10617,12 @@ export function UniversalDiagram({ type, data, source, theme = 'dark', sketchMod
     case 'class': return <ClassDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'usecase': return <UseCaseDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'component': return <ComponentDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
-    case 'c4': return <C4Diagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
+    case 'c4':
+      // Use layered layout if no relationships exist and layers are defined
+      if (parsed.layoutMode === 'layered') {
+        return <LayeredArchitectureDiagram data={parsed} theme={t} />;
+      }
+      return <C4Diagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
     case 'requirement': return <RequirementDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
     case 'sankey': return <SankeyDiagram data={parsed} theme={t} sketchMode={sketchMode} />;
     case 'swimlane': return <SwimlaneDiagram data={parsed} theme={t} sketchMode={sketchMode} onLabelChange={onLabelChange} onDeleteNodes={onDeleteNodes} onPasteNodes={onPasteNodes} />;
@@ -10365,40 +11112,65 @@ function MermaidExportModal({ isOpen, onClose, diagramType, diagramSource }) {
 const DEMOS = {
   journey: { title: '🚶 Journey', source: `[actor] User\n[page] Landing Page\n[action] Sign Up\n[email] Verify Email\n[page] Onboarding\n[page] Dashboard\n[notification] Welcome!\n\nUser -Visit-> Landing Page\nLanding Page -Click CTA-> Sign Up\nSign Up -Submit-> Verify Email\nVerify Email -Confirm-> Onboarding\nOnboarding -Complete-> Dashboard\nDashboard -> Welcome!` },
   mindmap: { title: '🧠 Mind Map', source: `Project\n  Goals\n    Revenue\n    Growth\n  Features\n    Auth\n    Dashboard\n  Stack\n    React\n    Node` },
-  architecture: { title: '🏗️ Architecture', source: `# Modern Cloud Architecture
-[users] Web App, Mobile App
-[cdn] CloudFront CDN
-[lb] Load Balancer
-[gateway] API Gateway
+  architecture: { title: '🏗️ Architecture', source: `title: E-Commerce Platform
+subtitle: C4 Container Diagram
 
-boundary "Backend Services" {
-[microservices] Auth Service, User Service, Order Service
-[worker] Background Worker
+# External actors
+[person] Customer: Online shopper
+[person] Admin: System administrator
+[external] Payment Gateway: Stripe/PayPal
+[external] Email Service: SendGrid
+
+boundary "Web Layer" {
+[webapp] Web Application: React SPA
+[mobileapp] Mobile App: React Native
+[desktop] Admin Portal: Vue.js
+}
+
+boundary "API Gateway" {
+[gateway] Kong Gateway: API routing
+[auth] Auth Service: OAuth2/JWT
+}
+
+boundary "Microservices" {
+[service] User Service: User management
+[service] Product Service: Catalog
+[service] Order Service: Orders/checkout
+[service] Notification Service: Alerts
 }
 
 boundary "Data Layer" {
 [database] PostgreSQL: Primary DB
-[cache] Redis: Session cache
-[queue] Kafka: Event stream
+[database] MongoDB: Product catalog
+[cache] Redis: Sessions/cache
+[queue] RabbitMQ: Event queue
 }
 
-[monitoring] Prometheus, Grafana
+boundary "Infrastructure" {
+[monitoring] Prometheus: Metrics
+[logging] ELK Stack: Logs
+[server] Kubernetes: Orchestration
+}
 
 # Connections
-Web App -> CloudFront CDN
-Mobile App -> Load Balancer
-CloudFront CDN -> Load Balancer
-Load Balancer -> API Gateway
-API Gateway -> Auth Service
-API Gateway -> User Service
-API Gateway -> Order Service
-Auth Service --> Redis: sessions
+Customer -> Web Application: Uses
+Customer -> Mobile App: Uses
+Admin -> Admin Portal: Manages
+Web Application -> Kong Gateway: API calls
+Mobile App -> Kong Gateway: API calls
+Admin Portal -> Kong Gateway: Admin API
+Kong Gateway -> Auth Service: Validates
+Kong Gateway -> User Service
+Kong Gateway -> Product Service
+Kong Gateway -> Order Service
+Order Service -> Payment Gateway: Process payment
+Notification Service -> Email Service: Send emails
 User Service -> PostgreSQL
+Product Service -> MongoDB
 Order Service -> PostgreSQL
-Order Service ->> Kafka: events
-Background Worker -> Kafka
-Prometheus --> Auth Service: metrics
-Prometheus --> User Service: metrics` },
+Auth Service -> Redis: Sessions
+Order Service -> RabbitMQ: Events
+Notification Service -> RabbitMQ: Listens` },
   erd: { title: '📊 ERD', source: `CREATE TABLE users (id UUID PRIMARY KEY, email VARCHAR(255), name VARCHAR(100));\nCREATE TABLE posts (id UUID PRIMARY KEY, title VARCHAR(200), user_id UUID REFERENCES users(id));` },
   sequence: { title: '🔄 Sequence', source: `participant Client, API, DB\n\nClient -> API: Request\nAPI -> DB: Query\nDB --> API: Result\nAPI --> Client: Response` },
   flowchart: { title: '📈 Flowchart', source: `(start) Start\nStart -> (process) Process\nProcess -> (decision) Valid?\nValid? -> (end) Done\nValid? -> (io) Error` },
@@ -10485,7 +11257,31 @@ Prometheus --> User Service: metrics` },
   activity: { title: '🔄 Activity', source: `[start]\n:Open App;\n:Login;\n<Valid?>\n:Dashboard;\n:Error;\n[end]\n\nstart -> Open App\nOpen App -> Login\nLogin -> Valid?\nValid? -> Dashboard: Yes\nValid? -> Error: No\nDashboard -> end\nError -> Login` },
   usecase: { title: '👤 Use Case', source: `actor Customer\nactor Admin\n(Browse Products)\n(Checkout)\n(Manage Inventory)\n(View Reports)\n\nCustomer -> Browse Products\nCustomer -> Checkout\nAdmin -> Manage Inventory\nAdmin -> View Reports` },
   component: { title: '📦 Component', source: `[service] Frontend\n[api] API Gateway\n[service] Auth Service\n[database] Database\n[cache] Redis Cache\n\nFrontend --> API Gateway\nAPI Gateway --> Auth Service\nAPI Gateway --> Database\nAuth Service --> Redis Cache` },
-  c4: { title: '🏛️ C4', source: `[person] User: App customer\n[system] WebApp: Main application\n[container] API: REST Backend\n[database] DB: PostgreSQL\n[external] Email: SendGrid\n\nUser -> WebApp: Uses\nWebApp -> API: Calls\nAPI -> DB: Reads/Writes\nAPI -> Email: Sends` },
+  c4: { title: '🏛️ C4', source: `title: Banking System
+subtitle: Container Diagram
+
+[person] Customer: Bank customer
+
+boundary "Application" {
+  [container] Web App: React
+  [container] Mobile App: Swift/Kotlin
+}
+
+boundary "Services" {
+  [container] API: REST Backend
+  [container] Auth: OAuth2
+}
+
+boundary "Data" {
+  [database] Database: PostgreSQL
+}
+
+Customer -> Web App: Uses
+Customer -> Mobile App: Uses
+Web App -> API: Calls
+Mobile App -> API: Calls
+API -> Auth: Validates
+API -> Database: Reads/Writes` },
   requirement: { title: '📋 Requirement', source: `requirement Login {\ntext: Users must authenticate\nrisk: low\npriority: high\n}\n\nrequirement Security {\ntext: All data encrypted\npriority: critical\n}\n\nrequirement Performance {\ntext: Response under 200ms\nrisk: medium\npriority: high\n}\n\nLogin -> Security: derives\nSecurity -> Performance: traces` },
   sankey: { title: '🌊 Sankey', source: `# Energy Flow\nCoal -> Electricity: 40\nGas -> Electricity: 30\nNuclear -> Electricity: 20\nSolar -> Electricity: 10\nElectricity -> Residential: 35\nElectricity -> Commercial: 25\nElectricity -> Industrial: 30\nElectricity -> Transport: 10` },
   swimlane: { title: '🏊 Swimlane', source: `[Customer]\n(start) Submit Order -> Review Order\n\n[Sales]\nReview Order -> (decision) Approve?\nApprove? -> Process Payment\nApprove? -> Reject Order\n\n[Warehouse]\nProcess Payment -> Ship Order\nShip Order -> (end) Complete` }
@@ -11507,4 +12303,23 @@ export default function Demo() {
   );
 }
 
-export { MindMapDiagram, ERDDiagram, ArchitectureDiagram, FlowDiagram, UserJourneyDiagram, TimelineDiagram, SequenceDiagram, OrgChartDiagram, NetworkDiagram, GanttDiagram, DeploymentDiagram, PieChartDiagram, QuadrantDiagram, GitGraphDiagram, WireframeDiagram, ClassDiagram, UseCaseDiagram, Parsers, THEMES, COLORS };
+// DSL Reference exports for AI integration
+export {
+  // Diagram components
+  MindMapDiagram, ERDDiagram, ArchitectureDiagram, FlowDiagram, UserJourneyDiagram,
+  TimelineDiagram, SequenceDiagram, OrgChartDiagram, NetworkDiagram, GanttDiagram,
+  DeploymentDiagram, PieChartDiagram, QuadrantDiagram, GitGraphDiagram, WireframeDiagram,
+  ClassDiagram, UseCaseDiagram,
+  // Core utilities
+  Parsers, THEMES, COLORS,
+  // DSL Reference for AI generation
+  DSLReference,
+  DSL_REFERENCE,
+  DSL_SYNTAX,
+  DIAGRAM_TYPES,
+  AI_PROMPT_TEMPLATE,
+  getDSLForType,
+  getAvailableTypes,
+  createAIPrompt,
+  getCompactReference
+};
