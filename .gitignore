@@ -53,3 +53,4 @@ dist/*.d.ts.map
 
 # Experimental TS entry point
 src/index.ts
+.npmrc
