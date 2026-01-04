@@ -1,6 +1,6 @@
 {
   "name": "ddflow",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "22+ diagram types from simple text DSL - Mind maps, flowcharts, ERD, architecture, wireframes and more. 100% client-side with drag & drop support.",
   "keywords": [
     "diagram",
